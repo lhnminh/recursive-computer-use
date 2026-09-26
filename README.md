@@ -1,58 +1,228 @@
 # Recursive Computer-Use Harness
 
-A local-first desktop agent whose task-specific harness can improve from
-verified experience. Desktop actions execute locally through `pyautogui`.
-MongoDB stores redacted experience summaries, local embeddings, evaluation
-metrics, and versioned policies. Raw typed content and screenshot bytes are not
-persisted to MongoDB.
+Recursive Computer-Use is a local-first desktop agent that improves its
+task-specific operating policy from verified experience. The model observes the
+screen, writes short Python snippets against a restricted `pyautogui` proxy,
+and operates the local mouse and keyboard. MongoDB provides durable telemetry,
+redacted episodic memory, versioned harness policies, evaluation evidence, and
+Atlas Vector Search.
 
-## What changes across runs
+The project targets the **Recursive Harnessing** challenge: the model weights
+remain unchanged while the surrounding harness adapts its rules, context,
+action limits, retry behavior, screenshot cadence, and existing tool access.
 
-1. The runtime loads the latest accepted policy, or a candidate awaiting trial.
-2. A local verifier measures task success and safety outcomes.
-3. A verified failure is summarized, embedded locally, and stored in MongoDB.
-4. Atlas Vector Search retrieves similar lessons.
-5. The engine proposes a constrained candidate policy.
-6. The next verified run promotes that policy only if success improves without
-   increasing wrong clicks, wrong-field entries, policy violations, or tool
-   access.
+## Why this is more than action logging
 
-Policies may change rules, screenshot cadence, action budgets, retry limits,
-and the existing tool allowlist. They cannot rewrite source code, replace the
-base prompt, create tools, or grant new tools.
+A normal computer-use agent forgets what happened when the process exits. This
+harness creates a controlled learning cycle:
 
-## Setup
+```text
+Local task execution
+        │
+        ▼
+Sanitized action telemetry ────────────────┐
+        │                                  │
+        ▼                                  │
+Deterministic localhost verifier           │
+        │                                  │
+        ▼                                  │
+Redacted experience + local embedding      │
+        │                                  │
+        ▼                                  │
+MongoDB Atlas Vector Search                │
+        │                                  │
+        ▼                                  │
+Constrained candidate policy               │
+        │                                  │
+        ▼                                  │
+Next matching run uses candidate           │
+        │                                  │
+        ▼                                  │
+Baseline/candidate regression gate ────────┘
+        │
+        ├── improvement with no safety regression → accept
+        └── otherwise                              → reject
+```
 
-Requires Python 3.13+ and the dependencies in `pyproject.toml`.
+The engine never accepts a policy because the model says it is better. A local
+verifier must produce measurable evidence.
+
+## Current capabilities
+
+- Bounded computer-use loop with a maximum of 30 model turns.
+- OpenAI-compatible Chat Completions tool calling.
+- Persistent Python namespace for short desktop-control programs.
+- Screenshots returned to the configured vision-capable model.
+- MongoDB run lifecycle and ordered action telemetry.
+- Sanitized logging for clicks, movement, dragging, typing, keys, hotkeys, and
+  scrolling.
+- Task-scoped experience memory and policy versions.
+- Deterministic 64-dimensional embeddings generated locally.
+- Atlas Vector Search with a recent-memory fallback.
+- Candidate policy creation after verified failure.
+- Candidate promotion only after verified improvement.
+- Runtime enforcement of tool allowlists, action budgets, and screenshot
+  cadence.
+- Restricted imports and blocked direct file access in model-generated code.
+- Local-only verifier URL enforcement.
+- Deterministic form demo and read-only evidence dashboard.
+- Offline dashboard fixtures when MongoDB is not available.
+
+## Repository layout
+
+```text
+src/recursive_computer_use/
+  __init__.py              CLI argument parsing
+  __main__.py              python -m entry point
+  agent.py                 model loop and evolution integration
+  auth.py                  Codex proxy or API-key credential resolution
+  sandbox.py               restricted execution and policy enforcement
+  store.py                 MongoDB run and action persistence
+  verification.py          localhost verifier client
+  evolution/
+    embedding.py           local hashing-vector embeddings
+    evaluator.py           deterministic candidate promotion gate
+    memory.py              Atlas Vector Search and fallback retrieval
+    models.py              validated persistence contracts
+    policy.py              constrained policy mutation and repository
+    runtime.py             two-run evolution coordinator
+demo/
+  app.py                   deterministic local form and verifier
+dashboard/
+  app.py                   read-only evidence dashboard
+  fixtures.json            offline before/after demonstration
+scripts/
+  setup_atlas.py           standard and vector index creation
+tests/
+  test_recording.py        action interception and sanitization
+  test_store.py            persistence and run lifecycle
+  test_evolution.py        memory, policy, and evaluation behavior
+```
+
+## Requirements
+
+- Windows, macOS, or Linux desktop session accessible to `pyautogui`.
+- Python 3.13 or newer.
+- A vision-capable OpenAI-compatible model endpoint.
+- MongoDB Atlas for the complete demo, or local MongoDB for telemetry and the
+  non-vector fallback.
+- Node.js only when using the optional `codex-as-api` proxy.
+
+The app controls the real desktop. Run it only in a disposable or understood
+environment, and keep `pyautogui`'s fail-safe enabled.
+
+## Installation
+
+From the repository root in PowerShell:
 
 ```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .
 Copy-Item .env.example .env
-# Edit .env with MONGODB_URI and either OPENAI_API_KEY or Codex proxy access.
 ```
 
-For Atlas, create the collection indexes and 64-dimensional vector index:
+If `py -3.13` is unavailable, use any installed Python version that satisfies
+the `>=3.13` requirement.
 
-```powershell
-python scripts/setup_atlas.py
+## Configuration
+
+`.env` supports:
+
+```dotenv
+OPENAI_API_KEY=sk-...
+MONGODB_URI=mongodb://localhost:27017
+MONGODB_DB=recursive_computer_use
 ```
 
-When using Codex OAuth, start the compatible local proxy separately:
+Do not commit `.env`. It is excluded by `.gitignore`.
+
+### Model authentication
+
+Credential resolution uses this order:
+
+1. If the local Codex authentication file contains ChatGPT OAuth credentials,
+   the app uses `http://127.0.0.1:18080/v1` through `codex-as-api`.
+2. Otherwise it uses `OPENAI_API_KEY` with the standard OpenAI endpoint.
+
+Start the proxy in a separate terminal when using Codex OAuth:
 
 ```powershell
 npx codex-as-api
 ```
 
-## Hackathon demo
+If the proxy is expected but not listening, the CLI fails before starting a
+desktop run and prints the startup command.
 
-Start the deterministic local form task:
+### MongoDB modes
+
+Local MongoDB works for:
+
+- runs and actions;
+- experiences and policies;
+- candidate evaluations;
+- recent task-memory fallback.
+
+MongoDB Atlas adds `$vectorSearch` over the `experiences.embedding` field.
+
+Create the required indexes after setting an Atlas URI:
 
 ```powershell
+python scripts/setup_atlas.py
+```
+
+The script creates:
+
+- `experiences(task_key, created_at)`;
+- unique `policies(task_key, version)`;
+- `evaluations(task_key, created_at)`;
+- Atlas Vector Search index `experience_embedding` with 64 dimensions and
+  cosine similarity.
+
+Atlas search indexes provision asynchronously. Until the index is available,
+retrieval safely falls back to recent memories for the same task key.
+
+## Quick start without evolution
+
+Start the model proxy if needed, then run:
+
+```powershell
+python -m recursive_computer_use `
+  --no-log `
+  --no-evolve `
+  --verbose `
+  "Take a screenshot and describe what is visible. Do not click anything."
+```
+
+`--no-log` prevents MongoDB access. `--no-evolve` uses the conservative local
+policy without reading or writing policy memory.
+
+## Full hackathon demo
+
+The complete demo uses three terminals.
+
+### Terminal 1: local task and verifier
+
+```powershell
+.\.venv\Scripts\Activate.ps1
 python demo/app.py
 ```
 
-Open `http://127.0.0.1:8765`, or ask the agent to complete it:
+Endpoints:
+
+- Task page: `http://127.0.0.1:8765`
+- Verified metrics: `http://127.0.0.1:8765/api/result`
+- Reset: `POST http://127.0.0.1:8765/api/reset`
+
+The form contains a one-time delayed focus change. An agent that clicks and
+types without rechecking focus can place the name in the email field. The page
+records success, wrong-field entries, wrong clicks, actions, and duration.
+
+### Terminal 2: agent run
 
 ```powershell
+.\.venv\Scripts\Activate.ps1
 python -m recursive_computer_use `
   --task-key local-form-v1 `
   --verifier-url http://127.0.0.1:8765/api/result `
@@ -60,43 +230,267 @@ python -m recursive_computer_use `
   "Open http://127.0.0.1:8765 and complete the check-in using the exact values shown."
 ```
 
-The first verified failure creates policy v2. Reset the form with
-`POST http://127.0.0.1:8765/api/reset`, then repeat the same command. The
-candidate is applied during the second run and is accepted only when the local
-verifier reports improved success with no safety regression.
-
-Start the read-only evidence dashboard:
+The first verified failure under policy v1 creates candidate v2. Before the
+second run, reset the task:
 
 ```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8765/api/reset
+```
+
+Run the identical agent command again. Candidate v2 is loaded for the trial.
+It is accepted only if success improves and wrong clicks, wrong-field entries,
+policy violations, and tool access do not regress.
+
+### Terminal 3: evidence dashboard
+
+```powershell
+.\.venv\Scripts\Activate.ps1
 python dashboard/app.py
 ```
 
-Open `http://127.0.0.1:8787`. It reads MongoDB when configured and falls back
-to included demonstration fixtures when the database is unavailable.
+Open `http://127.0.0.1:8787`. The page refreshes every five seconds and shows:
 
-## General CLI
+- baseline and candidate metrics;
+- the retrieved lesson;
+- the policy version and rule diff;
+- the accept or reject decision;
+- the persistence source, Atlas or offline fixtures;
+- the privacy boundary.
 
-```powershell
-python -m recursive_computer_use [options] "desktop task"
+If Atlas is unavailable or empty, the dashboard uses `dashboard/fixtures.json`
+so the presentation surface still works. Clearly tell judges when fixtures are
+being shown; the source label appears at the top of the page.
+
+## CLI reference
+
+```text
+recursive-computer-use [options] PROMPT
 ```
 
-Important options:
+| Option | Default | Purpose |
+|---|---|---|
+| `PROMPT` | required | Natural-language desktop task |
+| `--model` | `gpt-5.5` | OpenAI-compatible model identifier |
+| `--verbose`, `-v` | off | Print model turns, screenshots, and evolution results |
+| `--mongodb-uri` | environment or localhost | Override MongoDB connection URI |
+| `--mongodb-db` | environment or `recursive_computer_use` | Override database name |
+| `--no-log` | off | Disable run and action persistence |
+| `--task-key` | `general-desktop` | Scope memories and policies to a task family |
+| `--verifier-url` | none | Local endpoint supplying deterministic metrics |
+| `--no-evolve` | off | Disable persistent policy evolution |
 
-- `--model`: model identifier.
-- `--task-key`: stable task family for scoped memory and policies.
-- `--verifier-url`: localhost endpoint returning deterministic metrics.
-- `--mongodb-uri` and `--mongodb-db`: persistence overrides.
-- `--no-log`: disable MongoDB telemetry.
-- `--no-evolve`: enforce the local fallback policy without evolution.
-- `--verbose`: show turn-by-turn activity.
+Use a stable `--task-key` for repeated variants of one workflow. Do not reuse a
+task key across unrelated applications or objectives, because their memories
+and policies would become mixed.
 
-## Privacy and control
+## Evolution lifecycle
 
-- Desktop execution remains local.
-- Typed text is represented only by length in action telemetry.
-- Prompt and final text are redacted and truncated before persistence.
-- Screenshot bytes are never persisted to MongoDB. Screenshots selected by the
-  agent can still be sent to the configured model endpoint for visual reasoning.
-- The verifier URL is restricted to localhost.
-- Model code runs with blocked file access and a restricted import allowlist.
-- Policy enforcement happens outside model-generated code.
+### Initial policy
+
+For a new task key, the engine stores policy v1 with conservative defaults:
+
+- inspect before acting;
+- use short action groups;
+- stop rather than guess;
+- maximum three actions without a screenshot;
+- 40-action budget;
+- two retries;
+- allowlisted desktop primitives only.
+
+### Verified failure
+
+After a verifier reports failure:
+
+1. The engine derives failure tags such as `wrong_field`, `wrong_click`, or
+   `policy_violation`.
+2. It stores a redacted summary and local embedding.
+3. It retrieves up to three similar experiences.
+4. It converts retrieved lessons into a constrained candidate policy.
+5. The candidate remains untrusted until another verified run.
+
+### Candidate trial
+
+The next run for that task key prefers the pending candidate. At completion,
+the evaluator compares it with the latest experience from its accepted parent.
+
+Acceptance requires:
+
+- strictly higher success rate;
+- no increase in wrong clicks;
+- no increase in wrong-field entries;
+- no increase in policy violations;
+- no expansion of tool access.
+
+Failed candidates are marked `rejected`. Successful candidates are marked
+`accepted`; the highest accepted version becomes the next baseline.
+
+## MongoDB data model
+
+### `runs`
+
+One document per CLI invocation:
+
+```json
+{
+  "run_id": "uuid-like hex",
+  "prompt_summary": "redacted and truncated",
+  "prompt_sha256": "stable digest",
+  "model": "gpt-5.5",
+  "status": "running | completed | failed | interrupted",
+  "started_at": "UTC datetime",
+  "finished_at": "UTC datetime",
+  "final_summary": "redacted and truncated",
+  "task_key": "local-form-v1",
+  "policy_version": 2,
+  "verified_metrics": {},
+  "evolution_result": {}
+}
+```
+
+### `actions`
+
+Ordered sanitized desktop events:
+
+```json
+{
+  "run_id": "...",
+  "turn": 2,
+  "seq": 7,
+  "kind": "click | write | scroll | policy_violation | ...",
+  "x": 640,
+  "y": 420,
+  "args": {"button": "left"},
+  "screenshot_ref": null,
+  "ts": "UTC datetime"
+}
+```
+
+Typing stores `text_length`, never the text. Character key presses are stored
+as `[character]`; control keys such as `tab` or `ctrl` may be retained.
+
+### `experiences`
+
+```json
+{
+  "task_key": "local-form-v1",
+  "outcome": "success | failure",
+  "failure_tags": ["wrong_field"],
+  "summary": "redacted verifier summary",
+  "lesson": "verify the focused field before typing",
+  "policy_version": 1,
+  "metrics": {},
+  "embedding": [0.0],
+  "created_at": "UTC datetime"
+}
+```
+
+### `policies`
+
+```json
+{
+  "task_key": "local-form-v1",
+  "version": 2,
+  "parent_version": 1,
+  "status": "candidate | accepted | rejected",
+  "rules": ["..."],
+  "limits": {
+    "max_actions_without_screenshot": 1,
+    "action_budget": 40,
+    "retry_limit": 2,
+    "tool_allowlist": ["click", "type", "screenshot"]
+  },
+  "reason": "redacted explanation",
+  "created_at": "UTC datetime"
+}
+```
+
+### `evaluations`
+
+Stores baseline and candidate metrics, the decision, and the deterministic
+reason for that decision.
+
+## Privacy and safety boundaries
+
+The project follows a local-first hybrid design:
+
+- Mouse and keyboard execution occurs on the local machine.
+- Raw typed content is excluded from action telemetry.
+- Prompt and final response text are redacted and truncated before MongoDB
+  persistence.
+- Screenshot bytes are never persisted to MongoDB.
+- Screenshots explicitly selected by the agent can still transit to the
+  configured model endpoint for visual reasoning.
+- Experience embeddings are generated locally.
+- The verifier client accepts only `http://localhost`, `127.0.0.1`, or `::1`.
+- Policy changes cannot rewrite source, replace the base prompt, create tools,
+  or add tools absent from the parent policy.
+- Telemetry failures are non-fatal and must never block a legitimate desktop
+  action.
+- Policy violations are blocked before delegation to real `pyautogui`.
+
+### Important limitation
+
+The restricted Python namespace is a guardrail, not a hardened operating-system
+sandbox. It blocks common file APIs and non-allowlisted imports, but in-process
+Python should not be treated as a security boundary against an adversarial
+model or prompt. Run sensitive workflows only with additional OS isolation and
+human supervision.
+
+## Development checks
+
+Run from the repository root after installing dependencies:
+
+```powershell
+python -m unittest discover -s tests -v
+python -m compileall -q src demo dashboard scripts
+git diff --check
+```
+
+The tests use fakes and must not move the real mouse, type on the real keyboard,
+or require a live MongoDB deployment.
+
+## Troubleshooting
+
+### `Cannot reach the local Codex proxy`
+
+Start `npx codex-as-api` in another terminal, or remove stale Codex OAuth state
+and use `OPENAI_API_KEY`.
+
+### MongoDB unavailable
+
+The agent continues without persistence. Confirm `MONGODB_URI`, Atlas network
+access, credentials, and TLS settings. Use `--no-log` when persistence is not
+needed.
+
+### Vector search always uses fallback
+
+Run `python scripts/setup_atlas.py`, wait for the Atlas index to become active,
+and verify the index is named `experience_embedding` with 64 dimensions.
+
+### Dashboard shows fixtures
+
+The dashboard could not read non-empty MongoDB collections. Check its terminal,
+the `.env` values inherited by the process, and whether completed verified runs
+exist.
+
+### Actions stop with a screenshot-policy violation
+
+The active policy requires a screenshot before another action. The model should
+call `display(pyautogui.screenshot())`, inspect the returned image, and then
+continue.
+
+### `ModuleNotFoundError`
+
+Activate `.venv` and run `python -m pip install -e .` from the repository root.
+
+## Demo narrative
+
+The concise judge-facing explanation is:
+
+> The desktop agent remains local. A deterministic verifier detects a failure.
+> MongoDB Atlas retrieves similar redacted experiences. The harness creates a
+> constrained policy candidate, applies it on the next matching run, and accepts
+> it only when measured success improves without a safety regression.
+
+That claim should be made only when the live dashboard is reading real MongoDB
+data. When it shows offline fixtures, describe them as a presentation fallback.
