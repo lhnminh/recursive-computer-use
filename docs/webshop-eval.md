@@ -71,6 +71,12 @@ Needs WebShop on :3000 (small setup), the Codex proxy on :18080 and
   same task side by side.
 - **MongoDB live:** a change stream on `skills` shows every recipe update, as
   any other agent on the same database receives it.
+- **Show in browser windows** (on by default): each agent gets a real
+  Chromium window on the WebShop site, side by side. The browsing agent types,
+  opens products, selects options and presses Buy Now; the MongoDB agent's
+  window walks through the pages its API replay hit. Playwright drives the
+  windows directly: no mouse or keyboard takeover. Windows stay open until
+  the next run.
 
 Other processes use the same shared recipes with
 `uv run python scripts/webshop_eval.py --atlas ...` (learn saves to MongoDB;

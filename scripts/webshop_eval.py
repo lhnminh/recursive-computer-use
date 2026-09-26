@@ -98,7 +98,8 @@ def task_text(session: str) -> str:
 # -- learn ---------------------------------------------------------------------
 
 
-def learn(learn_task: int = 1500, *, store: Any = None, on_event: Event | None = None) -> Recipe:
+def learn(learn_task: int = 1500, *, store: Any = None, on_event: Event | None = None,
+          headless: bool = True, slow_mo: int = 0, window: tuple[int, int, int, int] | None = None) -> Recipe:
     """Record one purchase headless and learn a recipe from it.
 
     The recipe is cached in .recordings/ and, with *store* (a
@@ -113,8 +114,10 @@ def learn(learn_task: int = 1500, *, store: Any = None, on_event: Event | None =
     _emit(on_event, "task", task)
     _emit(on_event, "record", "Recording one purchase in a headless browser (network traffic -> HAR)")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(record_har_path=str(DEMO_HAR), record_har_content="embed")
+        args = [f"--window-position={window[0]},{window[1]}", f"--window-size={window[2]},{window[3]}"] if window else []
+        browser = p.chromium.launch(headless=headless, slow_mo=slow_mo, args=args)
+        ctx = browser.new_context(record_har_path=str(DEMO_HAR), record_har_content="embed",
+                                  no_viewport=bool(window))
         page = ctx.new_page()
         page.goto(f"{BASE}/{session}")
         words = re.sub(r"[^a-z0-9 ]", " ", task.split("Instruction:", 1)[1].lower()).split()
@@ -171,6 +174,8 @@ def run_recipe_arm(
     def on_step(step: Any, chosen: dict[str, Any]) -> None:
         _emit(emit, "http", f"{step.id}: HTTP {step.status} in {step.ms} ms")
 
+    params: dict[str, str] = {}
+    result = None
     try:
         task = task_text(session)
         _emit(emit, "task", task)
@@ -183,7 +188,9 @@ def run_recipe_arm(
     except Exception as exc:  # noqa: BLE001 - an eval row, not a crash
         reward, error = 0.0, repr(exc)[:200]
     row = {"arm": "recipe", "session": session, "reward": reward, "seconds": time.time() - t,
-           "llm_calls": stats["llm_calls"], "error": error}
+           "llm_calls": stats["llm_calls"], "error": error,
+           "params": params,
+           "chosen": {c.var: (result.vars.get(c.var) if result else None) for st in r.steps for c in st.choose}}
     _emit(emit, "done", f"Score {reward:.2f} in {row['seconds']:.1f}s, {row['llm_calls']} model calls"
           + (f" ({error})" if error else ""), row=row)
     return row

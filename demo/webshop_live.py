@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
+from demo import visible  # noqa: E402
 from scripts import webshop_eval as ws  # noqa: E402
 from recursive_computer_use.network.learner import default_client  # noqa: E402
 from recursive_computer_use.network.recipe import KIND  # noqa: E402
@@ -49,6 +50,8 @@ _busy = {"teach": False, "race": False}
 _store = None
 _client = None
 _instructions: dict[int, str] = {}
+_close_windows = threading.Event()  # set to close the previous run's browser windows
+WINDOW_HOLD_S = 600
 
 
 def publish(lane: str, event: dict[str, Any]) -> None:
@@ -137,11 +140,23 @@ def _job(kind: str, target, *args) -> bool:
     return True
 
 
-def teach(n: int, attempts: int = 2) -> None:
+def _new_windows() -> threading.Event:
+    """Close windows from the previous run and return the event for this run's."""
+    global _close_windows
+    _close_windows.set()
+    _close_windows = threading.Event()
+    return _close_windows
+
+
+def teach(n: int, show: bool = True, attempts: int = 2) -> None:
     """Learn from one recording, then verify on the demo task before other agents rely on it."""
     publish("teach", {"kind": "start", "text": f"Teach from task fixed_{n}"})
+    if show:
+        _new_windows()
     for attempt in range(1, attempts + 1):
-        recipe = ws.learn(n, store=store(), on_event=lambda e: publish("teach", e))
+        recipe = ws.learn(n, store=store(), on_event=lambda e: publish("teach", e),
+                          headless=not show, slow_mo=350 if show else 0,
+                          window=visible.slot(0, 1) if show else None)
         publish("teach", {"kind": "verify", "text": "Verifying: replay the new recipe on its demo task (fresh session)"})
         row = ws.run_recipe_arm(recipe, ws.arm_session(f"verify{int(time.time()) % 1_000_000}", n), client(),
                                 lambda e: publish("teach", {**e, "kind": "verify"}) if e["kind"] == "http" else None)
@@ -155,21 +170,59 @@ def teach(n: int, attempts: int = 2) -> None:
             publish("teach", {"kind": "learn", "text": "Verification failed, so the recipe retired. Learning again..."})
 
 
-def race(n: int) -> None:
+def race(n: int, show: bool = True) -> None:
     run_id = f"{int(time.time()) % 1_000_000}"
-    lanes = []
-    lanes.append(threading.Thread(target=lambda: (
-        publish("recipe", {"kind": "start", "text": f"Task fixed_{n}"}),
-        ws.run_from_atlas(store(), ws.arm_session(f"recipe{run_id}", n), client(), lambda e: publish("recipe", e)),
-    ), daemon=True))
-    lanes.append(threading.Thread(target=lambda: (
-        publish("browse", {"kind": "start", "text": f"Task fixed_{n}"}),
-        ws.run_baseline_arm(ws.arm_session(f"browse{run_id}", n), client(), lambda e: publish("browse", e)),
-    ), daemon=True))
-    for t in lanes:
-        t.start()
-    for t in lanes:
-        t.join()
+    close = _new_windows() if show else None
+    recipe_session = ws.arm_session(f"recipe{run_id}", n)
+    browse_session = ws.arm_session(f"browse{run_id}", n)
+    work_done = {"recipe": threading.Event(), "browse": threading.Event()}
+
+    def recipe_lane() -> None:
+        publish("recipe", {"kind": "start", "text": f"Task fixed_{n}"})
+        if not show:
+            ws.run_from_atlas(store(), recipe_session, client(), lambda e: publish("recipe", e))
+            return
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as pw:
+            browser, page = visible.open_window(pw, visible.slot(0))
+            page.goto(f"{ws.BASE}/{recipe_session}")
+            visible.banner(page, "Agent using MongoDB · looking up a recipe...", "#1f6feb")
+            row = ws.run_from_atlas(store(), recipe_session, client(), lambda e: publish("recipe", e))
+            if row.get("error") != "no recipe in Atlas":
+                visible.show_recipe_path(page, recipe_session, row)
+            _hold("recipe", close, browser)
+
+    def browse_lane() -> None:
+        publish("browse", {"kind": "start", "text": f"Task fixed_{n}"})
+        if not show:
+            ws.run_baseline_arm(browse_session, client(), lambda e: publish("browse", e))
+            return
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as pw:
+            browser, page = visible.open_window(pw, visible.slot(1), slow_mo=250)
+            visible.browse_visible(page, browse_session, client(), lambda e: publish("browse", e))
+            _hold("browse", close, browser)
+
+    def _hold(lane: str, event: threading.Event | None, browser: Any) -> None:
+        work_done[lane].set()  # the race job may end; this window stays up
+        if event is not None:
+            event.wait(WINDOW_HOLD_S)  # until the next run, or 10 minutes
+        browser.close()
+
+    def run_lane(lane: str, fn: Any) -> None:
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001
+            publish(lane, {"kind": "error", "text": f"{type(exc).__name__}: {exc}"[:300]})
+        finally:
+            work_done[lane].set()
+
+    for lane, fn in (("recipe", recipe_lane), ("browse", browse_lane)):
+        threading.Thread(target=run_lane, args=(lane, fn), daemon=True).start()
+    for ev in work_done.values():
+        ev.wait(600)
 
 
 def forget() -> int:
@@ -243,7 +296,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "forbidden"})
             return
         try:
-            n = int(json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 2) or b"{}").get("task", 0))
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 2) or b"{}")
+            n, show = int(body.get("task", 0)), bool(body.get("show", True))
         except (ValueError, AttributeError):
             self._json(400, {"error": "bad request"})
             return
@@ -251,9 +305,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "task out of range"})
             return
         if self.path == "/api/teach":
-            self._json(202 if _job("teach", teach, n) else 409, {"ok": True})
+            self._json(202 if _job("teach", teach, n, show) else 409, {"ok": True})
         elif self.path == "/api/race":
-            self._json(202 if _job("race", race, n) else 409, {"ok": True})
+            self._json(202 if _job("race", race, n, show) else 409, {"ok": True})
         elif self.path == "/api/forget":
             self._json(200, {"retired": forget()})
         else:
@@ -329,6 +383,7 @@ th{color:var(--dim);font-weight:500}.st-active{color:var(--green)}.st-candidate{
 <div class="controls">
   <label>Task <select id="task"></select></label>
   <button id="race" class="primary">Race on this task</button>
+  <label title="Open real browser windows on the WebShop site"><input type="checkbox" id="show" checked> Show in browser windows</label>
   <span style="flex:1"></span>
   <label>Teach from <select id="teachTask"></select></label>
   <button id="teach">Teach (1 recording → MongoDB)</button>
@@ -362,8 +417,8 @@ async function loadTasks(){const t=await (await fetch('/api/tasks')).json();
  const opts=Object.entries(t).map(([n,txt])=>`<option value="${n}">fixed_${n} · ${esc(txt).slice(0,90)}</option>`).join('');
  $('task').innerHTML=opts;$('teachTask').innerHTML=opts;$('teachTask').value='12';$('task').value='3'}
 async function post(path,body){const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body||{})});if(r.status===409)alert('Already running');return r}
-$('race').onclick=()=>{for(const l of ['recipe','browse']){$(l+'-log').innerHTML='';calls[l]=0;$(l+'-calls').textContent='0';$(l+'-score').className='stat score';$(l+'-score').querySelector('b').textContent='–';startTimer(l)}post('/api/race',{task:+$('task').value})};
-$('teach').onclick=()=>{$('teach-log').innerHTML='';startTimer('teach');post('/api/teach',{task:+$('teachTask').value})};
+$('race').onclick=()=>{for(const l of ['recipe','browse']){$(l+'-log').innerHTML='';calls[l]=0;$(l+'-calls').textContent='0';$(l+'-score').className='stat score';$(l+'-score').querySelector('b').textContent='–';startTimer(l)}post('/api/race',{task:+$('task').value,show:$('show').checked})};
+$('teach').onclick=()=>{$('teach-log').innerHTML='';startTimer('teach');post('/api/teach',{task:+$('teachTask').value,show:$('show').checked})};
 $('forget').onclick=async()=>{const r=await (await post('/api/forget')).json();add('feed','atlas',`Retired ${r.retired} recipe(s) for the demo`);refresh()};
 const es=new EventSource('/events');
 es.onmessage=m=>{const e=JSON.parse(m.data);
