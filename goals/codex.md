@@ -35,17 +35,17 @@ success. Move the decision to the server.
 
 ## X7. Capture (~45 min)
 
-- [ ] Add `playwright` to `pyproject.toml`. Document
+- [x] Add `playwright` to `pyproject.toml`. Document
       `uv run playwright install chromium`.
-- [ ] Add `.recordings/` to `.gitignore`.
-- [ ] `network/capture.py`: `record(url, *, task, har_path,
+- [x] Add `.recordings/` to `.gitignore`.
+- [x] `network/capture.py`: `record(url, *, task, har_path,
       agent_prompt=None, timeout_s=300)`. Headed Chromium with
       `record_har_path`. Without `agent_prompt`, a person does the flow.
       With it, call `agent.run(...)` so computer use does it in that window
       (see the Minh request in `GOALS.md`). Stop when the verifier reports
       success or on timeout. Return path, duration, verifier result.
-- [ ] Write only metadata to Atlas (`recordings` collection, Claude's N2).
-- [ ] Do not run the computer-use path on the real desktop without asking
+- [x] Write only metadata to Atlas (`recordings` collection, Claude's N2).
+- [x] Do not run the computer-use path on the real desktop without asking
       Adarsha.
 
 ## X8. Runner (~45 min)
@@ -85,4 +85,5 @@ success. Move the decision to the server.
 ## Done log
 
 <!-- One line per finished task: task id, commit hash, one-line result. -->
+- X6: `8057ccd`, server-verified check-in API, CSRF sessions, reset guests, and v2 redesign.
 - Phase 1: X1 `7a1e860`, X2 `61b1835`, X3 `f08a8da`, X4 `c35fc8f`, X5 `9e2ead7`.
