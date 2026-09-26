@@ -10,6 +10,7 @@ CLI usage::
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from typing import Sequence
 
@@ -152,6 +153,10 @@ def _network_command(argv: Sequence[str]) -> None:
     do_parser = commands.add_parser("do", help="Run a task with a learned API recipe first.")
     do_parser.add_argument("--site", required=True, help="Site host[:port] or HTTP URL.")
     do_parser.add_argument("--task-key", default="network-task")
+    do_parser.add_argument(
+        "--verifier",
+        help="JSON verifier plan with browser and API postconditions (required for real-site learning).",
+    )
     do_parser.add_argument("task", help="Natural-language task, including values to fill.")
     args = parser.parse_args(argv)
 
@@ -185,7 +190,18 @@ def _network_command(argv: Sequence[str]) -> None:
             print({"recipe_id": str(recipe_id), "capture_ok": result.ok, "duration_ms": result.duration_ms})
             return
 
-        result = do_task(args.task, site=args.site, task_key=args.task_key, store=store)
+        verifier = None
+        if args.verifier:
+            from pathlib import Path
+
+            verifier = json.loads(Path(args.verifier).read_text(encoding="utf-8"))
+        result = do_task(
+            args.task,
+            site=args.site,
+            task_key=args.task_key,
+            store=store,
+            verifier=verifier,
+        )
         print(result)
         if not result["ok"]:
             sys.exit(1)

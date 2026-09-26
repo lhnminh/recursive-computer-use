@@ -26,10 +26,11 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from .capture import CaptureResult
 from .learner import DEFAULT_MODEL, default_client
+from .verify import VerificationError, verify_browser_page
 
 MAX_TURNS = 12
 MAX_ACTIONS_PER_TURN = 12
@@ -326,6 +327,7 @@ def record_headless(
     headless: bool = True,
     client: Any = None,
     model: str = DEFAULT_MODEL,
+    verifier: Mapping[str, Any] | None = None,
 ) -> "HeadlessCaptureResult":
     """``capture.record`` with the browser agent as the operator.
 
@@ -348,9 +350,22 @@ def record_headless(
     deadline = started + timeout_s
     saved_session = None
     agent: BrowserAgentResult | None = None
+    browser_verdict: dict[str, Any] | None = None
 
     def verified() -> bool:
+        nonlocal browser_verdict
+        if verifier is not None:
+            browser_spec = verifier.get("browser")
+            if not isinstance(browser_spec, Mapping):
+                browser_verdict = {"success": False, "error": "browser verifier is required"}
+                return False
+            try:
+                browser_verdict = verify_browser_page(page, browser_spec)
+            except (VerificationError, ValueError, TypeError) as exc:
+                browser_verdict = {"success": False, "error": str(exc)[:200]}
+            return browser_verdict.get("success") is True
         payload = capture._fetch_verifier(verify_url)
+        browser_verdict = capture._safe_verifier(payload)
         return bool(payload and payload.get("success") is True)
 
     with sync_playwright() as playwright:
@@ -373,8 +388,13 @@ def record_headless(
             context.close()  # flushes the HAR
             browser.close()
 
-    verifier_result = capture._fetch_verifier(verify_url)
-    ok = bool(verifier_result and verifier_result.get("success") is True)
+    if verifier is None:
+        verifier_result = capture._fetch_verifier(verify_url)
+        browser_verdict = capture._safe_verifier(verifier_result)
+        ok = bool(verifier_result and verifier_result.get("success") is True)
+    else:
+        verifier_result = browser_verdict
+        ok = bool(agent and agent.ok and verifier_result and verifier_result.get("success") is True)
     recording_id = None
     if target.is_file():
         exchanges = load_exchanges(target, site=site, redactor=Redactor())

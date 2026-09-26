@@ -1,0 +1,44 @@
+{
+  "browser": {
+    "url_contains": ["/search"],
+    "query": {
+      "q": "tiptour-macos",
+      "type": "repositories"
+    },
+    "selectors": [
+      {
+        "css": "[data-testid='results-list'] a[href]",
+        "min_count": 1
+      }
+    ]
+  },
+  "api": {
+    "url": "https://github.com/search",
+    "query": {
+      "q": "{{query}}",
+      "type": "repositories"
+    },
+    "headers": {
+      "Accept": "text/html"
+    },
+    "format": "html",
+    "assertions": [
+      {
+        "element": {
+          "tag": "a",
+          "attrs": {
+            "href": {"starts_with": "/"}
+          }
+        },
+        "within": {
+          "tag": "div",
+          "attrs": {
+            "data-testid": "results-list"
+          }
+        },
+        "op": "count_gte",
+        "value": 1
+      }
+    ]
+  }
+}

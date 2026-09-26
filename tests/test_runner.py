@@ -4,7 +4,7 @@ import json
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from recursive_computer_use.network.recipe import Recipe
 from recursive_computer_use.network.runner import run_recipe
@@ -17,7 +17,20 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path == "/session":
+        if self.path.startswith("/search.json"):
+            query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
+            children = [] if query == "no-results" else [{"title": "Search result"}]
+            self._json(200, {"data": {"query": query, "children": children}})
+        elif self.path.startswith("/search"):
+            query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
+            markup = "" if query == "no-results" else f'<div data-testid="results-list"><a href="/{query}">result</a></div>'
+            body = markup.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/session":
             self.send_response(200)
             self.send_header("Set-Cookie", "sid=local-session; Path=/; HttpOnly")
             self.send_header("Content-Type", "application/json")
@@ -111,6 +124,61 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result.vars["count"], 3)
         self.assertTrue(result.verifier_result["success"])
         self.assertTrue(all(step.ms >= 0 for step in result.steps))
+
+    def test_verifier_supports_query_parameters_and_json_postconditions(self):
+        recipe = Recipe.from_dict({
+            "name": "search:results",
+            "description": "Search the site and return results.",
+            "scope": {"site": self.site, "task_key": "search"},
+            "params": [{"name": "query"}],
+            "steps": [{
+                "id": "search", "method": "GET",
+                "url": f"{self.base}/search.json?q={{{{query}}}}", "extract": [],
+            }],
+            "verify": {
+                "url": f"{self.base}/search.json",
+                "query": {"q": "{{query}}"},
+                "assertions": [
+                    {"path": "data.query", "op": "equals", "value": "{{query}}"},
+                    {"path": "data.children", "op": "nonempty"},
+                ],
+            },
+        })
+
+        passed = run_recipe(recipe, {"query": "accessibility"})
+        failed = run_recipe(recipe, {"query": "no-results"})
+
+        self.assertTrue(passed.ok, passed.error)
+        self.assertTrue(passed.verifier_result["success"])
+        self.assertFalse(failed.ok)
+        self.assertFalse(failed.verifier_result["success"])
+
+    def test_verifier_supports_html_postconditions_on_same_site(self):
+        recipe = Recipe.from_dict({
+            "name": "search:html-results",
+            "description": "Search the site and verify its result page.",
+            "scope": {"site": self.site, "task_key": "search"},
+            "params": [{"name": "query"}],
+            "steps": [{"id": "search", "method": "GET", "url": f"{self.base}/search", "extract": []}],
+            "verify": {
+                "url": f"{self.base}/search",
+                "query": {"q": "{{query}}"},
+                "headers": {"Accept": "text/html"},
+                "format": "html",
+                "assertions": [{
+                    "element": {"tag": "a", "attrs": {"href": {"starts_with": "/"}}},
+                    "within": {"tag": "div", "attrs": {"data-testid": "results-list"}},
+                    "op": "count_gte",
+                    "value": 1,
+                }],
+            },
+        })
+
+        passed = run_recipe(recipe, {"query": "tiptour-macos"})
+        failed = run_recipe(recipe, {"query": "no-results"})
+
+        self.assertTrue(passed.ok, passed.error)
+        self.assertFalse(failed.ok)
 
     def test_stops_after_unexpected_status_without_verifier(self):
         recipe = self.recipe([

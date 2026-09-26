@@ -7,7 +7,7 @@ import time
 import uuid
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
@@ -28,6 +28,7 @@ def do_task(
     learn_fn: Callable[..., Any] = learn_recipe,
     fill_fn: Callable[..., Any] = fill_params,
     runner_fn: Callable[..., Any] = run_recipe,
+    verifier: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Try a stored recipe, then teach and replay once when needed.
 
@@ -38,6 +39,11 @@ def do_task(
     """
     site_host = _normalize_site(site)
     url = site if urlsplit(site).scheme else f"http://{site_host}/"
+    if verifier is not None:
+        if not isinstance(verifier.get("browser"), Mapping) or not isinstance(
+            verifier.get("api"), Mapping
+        ):
+            raise ValueError("verifier plan needs both browser and api postconditions")
     store = store or _default_store()
     timings: dict[str, int] = {}
     events: list[dict[str, Any]] = []
@@ -86,12 +92,14 @@ def do_task(
         capture_fn = record_headless
     started = time.monotonic()
     recording_path = Path(".recordings") / f"{uuid.uuid4().hex}.har"
-    captured = capture_fn(
-        url,
-        task=task,
-        har_path=recording_path,
-        agent_prompt=task,
-    )
+    capture_args: dict[str, Any] = {
+        "task": task,
+        "har_path": recording_path,
+        "agent_prompt": task,
+    }
+    if verifier is not None:
+        capture_args["verifier"] = verifier
+    captured = capture_fn(url, **capture_args)
     timings["capture_ms"] = _elapsed(started)
     capture_result = _as_dict(captured)
     events.append({"event": "capture", **capture_result})
@@ -102,6 +110,9 @@ def do_task(
 
     started = time.monotonic()
     learned = learn_fn(har_path, task, site=site_host, task_key=task_key)
+    if verifier is not None:
+        learned.verify = dict(verifier["api"])
+        learned.validate()
     timings["learn_ms"] = _elapsed(started)
     if old_id is not None:
         new_id = store.supersede(old_id, learned)

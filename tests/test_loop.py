@@ -106,6 +106,29 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(store.saved[0][1], "rec-1")
         self.assertEqual(store.recorded[0][0], "new-recipe")
 
+    def test_verifier_plan_is_used_for_capture_and_saved_recipe_replay(self):
+        store = _Store()
+        plan = {
+            "browser": {"url_contains": ["/checkin"], "text_contains": ["Verified success"]},
+            "api": {
+                "url": "http://127.0.0.1:8765/api/result",
+                "assertions": [{"path": "success", "op": "equals", "value": True}],
+            },
+        }
+        result = self.invoke(
+            store,
+            verifier=plan,
+            runner_fn=lambda recipe, params: {"ok": True, "steps": [], "duration_ms": 8},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.captures[0][1]["verifier"], plan)
+        self.assertEqual(store.saved[0][0].verify, plan["api"])
+
+    def test_verifier_plan_requires_browser_and_api_assertions(self):
+        with self.assertRaisesRegex(ValueError, "browser and api"):
+            self.invoke(_Store(), verifier={"browser": {}})
+
     def test_default_fallback_uses_headless_browser_agent(self):
         store = _Store()
         captured = SimpleNamespace(

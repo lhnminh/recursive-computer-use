@@ -10,11 +10,12 @@ from html import unescape as html_unescape
 from http.cookiejar import CookieJar
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, Request, build_opener
 
-from .recipe import Choose, Recipe, RecipeError, render, render_url, resolve_session_vars
+from .recipe import FORBIDDEN_HEADERS, Choose, Recipe, RecipeError, render, render_url, resolve_session_vars
 from .session import cookie_jar_for, cookies_for, load_storage_state
+from .verify import VerificationError, evaluate_html, evaluate_json, evaluate_text
 
 STEP_TIMEOUT_S = 10
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -116,35 +117,80 @@ def run_recipe(
 
         result.vars = values
         if recipe.verify:
-            verify_request = Request(recipe.verify["url"], method="GET")
+            verify_url = recipe.verify["url"]
+            query = render(recipe.verify.get("query", {}), values)
+            if not isinstance(query, Mapping) or len(query) > 32:
+                raise VerificationError("verifier query must be an object with at most 32 keys")
+            if query:
+                parts = urlsplit(verify_url)
+                merged = parse_qsl(parts.query, keep_blank_values=True) + [
+                    (str(key), item)
+                    for key, raw in query.items()
+                    for item in (raw if isinstance(raw, (list, tuple)) else [raw])
+                ]
+                verify_url = urlunsplit(
+                    (parts.scheme, parts.netloc, parts.path, urlencode(merged), parts.fragment)
+                )
+            verify_headers = render(recipe.verify.get("headers", {}), values)
+            if not isinstance(verify_headers, Mapping):
+                raise VerificationError("verifier headers must be an object")
+            for header in verify_headers:
+                if str(header).lower() in FORBIDDEN_HEADERS:
+                    raise VerificationError(f"verifier header {header!r} is forbidden")
+            verify_request = Request(verify_url, headers=dict(verify_headers), method="GET")
             response, status, body_bytes, elapsed = _request(opener, verify_request)
             result.steps.append(StepResult("verify", status, elapsed))
-            if status != 200:
+            if status != int(recipe.verify.get("expect_status", 200)):
                 raise _RunFailure(f"verifier returned HTTP {status}")
-            try:
-                verdict = json.loads(body_bytes.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise _RunFailure("verifier returned invalid JSON") from exc
-            if not isinstance(verdict, dict):
-                raise _RunFailure("verifier response must be a JSON object")
-            result.verifier_result = {
-                key: verdict[key]
-                for key in (
-                    "success",
-                    "wrong_field_count",
-                    "wrong_click_count",
-                    "action_count",
-                    "policy_violations",
-                    "duration_ms",
+            verify_format = recipe.verify.get("format", "json")
+            if "assertions" in recipe.verify and verify_format == "text":
+                result.verifier_result = evaluate_text(
+                    body_bytes.decode("utf-8", errors="replace"),
+                    recipe.verify["assertions"],
+                    values,
                 )
-                if key in verdict
-            }
-            result.ok = verdict.get("success") is True
+                result.verifier_result["http_status"] = status
+            elif "assertions" in recipe.verify and verify_format == "html":
+                result.verifier_result = evaluate_html(
+                    body_bytes.decode("utf-8", errors="replace"),
+                    recipe.verify["assertions"],
+                    values,
+                )
+                result.verifier_result["http_status"] = status
+            else:
+                if "assertions" in recipe.verify and verify_format != "json":
+                    raise VerificationError("verifier format must be 'json', 'text', or 'html'")
+                try:
+                    verdict = json.loads(body_bytes.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise _RunFailure("verifier returned invalid JSON") from exc
+                if "assertions" in recipe.verify:
+                    result.verifier_result = evaluate_json(
+                        verdict, recipe.verify["assertions"], values
+                    )
+                    result.verifier_result["http_status"] = status
+                else:
+                    if not isinstance(verdict, dict):
+                        raise _RunFailure("verifier response must be a JSON object")
+                    result.verifier_result = {
+                        key: verdict[key]
+                        for key in (
+                            "success",
+                            "wrong_field_count",
+                            "wrong_click_count",
+                            "action_count",
+                            "policy_violations",
+                            "duration_ms",
+                        )
+                        if key in verdict
+                    }
+                    result.verifier_result["success"] = verdict.get("success") is True
+            result.ok = result.verifier_result["success"] is True
             if not result.ok:
                 raise _RunFailure("verifier did not confirm success")
         else:
             result.ok = True
-    except (RecipeError, _RunFailure, OSError, URLError, HTTPError, ValueError, TypeError) as exc:
+    except (RecipeError, VerificationError, _RunFailure, OSError, URLError, HTTPError, ValueError, TypeError) as exc:
         result.error = str(exc) or type(exc).__name__
     finally:
         result.duration_ms = int((time.monotonic() - started) * 1000)
