@@ -50,15 +50,15 @@ success. Move the decision to the server.
 
 ## X8. Runner (~45 min)
 
-- [ ] `network/runner.py`: `run_recipe(recipe, params) -> RunResult`.
+- [x] `network/runner.py`: `run_recipe(recipe, params) -> RunResult`.
       Standard library `urllib` + `http.cookiejar`. Render `{{var}}` with
       Claude's `network.recipe.render`.
-- [ ] Apply `extract` rules after each step. Stop at the first step whose
+- [x] Apply `extract` rules after each step. Stop at the first step whose
       status is not `expect_status`.
-- [ ] Only call hosts in `scope.site`. No redirects off-site. Timeout per
+- [x] Only call hosts in `scope.site`. No redirects off-site. Timeout per
       step 10 s.
-- [ ] Then GET `recipe.verify.url` and return its verdict.
-- [ ] Tests against a local `ThreadingHTTPServer` fixture.
+- [x] Then GET `recipe.verify.url` and return its verdict.
+- [x] Tests against a local `ThreadingHTTPServer` fixture.
 
 ## X9. The loop (~60 min)
 
@@ -86,4 +86,6 @@ success. Move the decision to the server.
 
 <!-- One line per finished task: task id, commit hash, one-line result. -->
 - X6: `8057ccd`, server-verified check-in API, CSRF sessions, reset guests, and v2 redesign.
+- X7: `b7399be`, headed HAR capture with local-only traces and redacted Atlas metadata.
+- X8: pending, standard-library recipe replay with scoped redirects and verifier checks.
 - Phase 1: X1 `7a1e860`, X2 `61b1835`, X3 `f08a8da`, X4 `c35fc8f`, X5 `9e2ead7`.
