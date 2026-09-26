@@ -119,6 +119,12 @@ def learn(learn_task: int = 1500, *, store: Any = None, on_event: Event | None =
         ctx = browser.new_context(record_har_path=str(DEMO_HAR), record_har_content="embed",
                                   no_viewport=bool(window))
         page = ctx.new_page()
+        if not headless:  # macOS opens it behind other windows
+            import subprocess
+
+            page.bring_to_front()
+            subprocess.Popen(["osascript", "-e", 'tell application "Google Chrome for Testing" to activate'],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         page.goto(f"{BASE}/{session}")
         words = re.sub(r"[^a-z0-9 ]", " ", task.split("Instruction:", 1)[1].lower()).split()
         page.fill("#search_input", " ".join(w for w in words if len(w) > 2)[:60])

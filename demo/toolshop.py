@@ -107,6 +107,10 @@ def teach(store: Any, on_event: Event, *, show: bool, window: tuple[int, int, in
         browser = p.chromium.launch(headless=not show, slow_mo=300 if show else 0, args=args)
         ctx = browser.new_context(record_har_path=str(HAR), record_har_content="embed", no_viewport=bool(window))
         page = ctx.new_page()
+        if show:
+            from demo.visible import bring_to_front
+
+            bring_to_front(page)
         page.goto(UI, wait_until="networkidle")
         page.fill("[data-test=search-query]", TEACH_ITEM)
         page.click("[data-test=search-submit]")

@@ -47,12 +47,33 @@ def slot(index: int, count: int = 2) -> tuple[int, int, int, int]:
     return index * width, 25, width, h - 25
 
 
-def open_window(pw: Any, rect: tuple[int, int, int, int], *, slow_mo: int = 0) -> tuple[Any, Any]:
+def split_slot(index: int, left_share: float = 0.4) -> tuple[int, int, int, int]:
+    """Two unequal side-by-side windows: index 0 gets *left_share* of the width."""
+    w, h = screen_size()
+    left = int(w * left_share)
+    return (0, 25, left, h - 25) if index == 0 else (left, 25, w - left, h - 25)
+
+
+def bring_to_front(page: Any = None) -> None:
+    """macOS opens the automation browser behind other windows; raise it."""
+    try:
+        if page is not None:
+            page.bring_to_front()
+        subprocess.Popen(["osascript", "-e", 'tell application "Google Chrome for Testing" to activate'],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001 - cosmetic only
+        pass
+
+
+def open_window(pw: Any, rect: tuple[int, int, int, int], *, slow_mo: int = 0, zoom: float = 0.75) -> tuple[Any, Any]:
+    """A headed window at *rect*. *zoom* < 1 keeps sites in their desktop layout at half-screen width."""
     x, y, w, h = rect
     browser = pw.chromium.launch(
-        headless=False, slow_mo=slow_mo, args=[f"--window-position={x},{y}", f"--window-size={w},{h}"]
+        headless=False, slow_mo=slow_mo,
+        args=[f"--window-position={x},{y}", f"--window-size={w},{h}", f"--force-device-scale-factor={zoom}"],
     )
     page = browser.new_context(no_viewport=True).new_page()
+    bring_to_front(page)
     return browser, page
 
 
