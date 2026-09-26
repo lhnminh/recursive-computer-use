@@ -95,7 +95,18 @@ def run_recipe(recipe: Recipe | Mapping[str, Any], params: Mapping[str, Any]) ->
                 raise _RunFailure("verifier returned invalid JSON") from exc
             if not isinstance(verdict, dict):
                 raise _RunFailure("verifier response must be a JSON object")
-            result.verifier_result = verdict
+            result.verifier_result = {
+                key: verdict[key]
+                for key in (
+                    "success",
+                    "wrong_field_count",
+                    "wrong_click_count",
+                    "action_count",
+                    "policy_violations",
+                    "duration_ms",
+                )
+                if key in verdict
+            }
             result.ok = verdict.get("success") is True
             if not result.ok:
                 raise _RunFailure("verifier did not confirm success")

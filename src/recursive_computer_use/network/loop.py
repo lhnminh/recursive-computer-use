@@ -152,12 +152,16 @@ def _elapsed(started: float) -> int:
 
 def _as_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
-        return dict(value)
+        result = dict(value)
+        result.pop("vars", None)
+        return result
     if is_dataclass(value):
-        return asdict(value)
+        result = asdict(value)
+        result.pop("vars", None)
+        return result
     return {
         key: getattr(value, key)
-        for key in ("ok", "steps", "vars", "error", "duration_ms", "verifier_result", "har_path", "recording_id", "source")
+        for key in ("ok", "steps", "error", "duration_ms", "verifier_result", "har_path", "recording_id", "source")
         if hasattr(value, key)
     }
 

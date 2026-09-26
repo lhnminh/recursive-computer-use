@@ -88,7 +88,7 @@ def _check_proxy(base_url: str) -> None:
 def run(
     prompt: str,
     *,
-    model: str = "gpt-5.5",
+    model: str = "gpt-5.6-terra",
     verbose: bool = False,
     mongodb_uri: str | None = None,
     mongodb_db: str | None = None,
@@ -108,7 +108,7 @@ def run(
     prompt:
         Natural-language description of the task to complete.
     model:
-        Model to use. Defaults to ``gpt-5.5`` (available via Codex proxy).
+        Model to use. Defaults to ``gpt-5.6-terra`` (available via Codex proxy).
         Use ``gpt-5.6-sol`` or ``gpt-6-astra`` for more capable models.
     verbose:
         Print turn-by-turn activity to stderr.
@@ -465,7 +465,7 @@ def _build_tool_content(
     for data_url in result.get("images", []):
         image_blocks.append({
             "type": "image_url",
-            "image_url": {"url": data_url, "detail": "high"},
+            "image_url": {"url": data_url},
         })
 
     return text_content, image_blocks

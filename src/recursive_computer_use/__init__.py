@@ -34,8 +34,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     parser.add_argument(
         "--model",
-        default="gpt-5.5",
-        help="Model to use (default: gpt-5.5). Available via proxy: gpt-5.5, gpt-5.6-sol, gpt-6-astra.",
+        default="gpt-5.6-terra",
+        help="Model to use (default: gpt-5.6-terra).",
     )
     parser.add_argument(
         "--verbose", "-v",

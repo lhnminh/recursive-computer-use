@@ -91,3 +91,4 @@ success. Move the decision to the server.
 - X9: `e1c9445`, recipe-first loop with capture-and-learn fallback, superseding and CLI commands.
 - X10: `8f217d7`, recipe/site-map dashboard panels and scratch-Atlas redesign demo.
 - Phase 1: X1 `7a1e860`, X2 `61b1835`, X3 `f08a8da`, X4 `c35fc8f`, X5 `9e2ead7`.
+- X7-X10: capture, scoped replay, healing loop, CLI, dashboard, and judge demo.

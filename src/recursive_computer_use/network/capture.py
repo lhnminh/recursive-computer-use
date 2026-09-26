@@ -103,11 +103,10 @@ def record(
     recording_id = None
     if target.is_file():
         redactor = Redactor()
-        safe_task = redactor.redact_text(task)
         exchanges = load_exchanges(target, site=_site(url), redactor=redactor)
         metadata = {
             "site": _site(url),
-            "task": safe_task,
+            "task": f"Recorded workflow for {_site(url)}",
             "har_sha256": har_sha256(target),
             "exchange_count": len(exchanges),
             "endpoints": endpoints(exchanges),
@@ -119,12 +118,26 @@ def record(
     return CaptureResult(
         har_path=target,
         duration_ms=duration_ms,
-        verifier_result=verifier_result,
+        verifier_result=_safe_verifier(verifier_result),
         ok=bool(verifier_result and verifier_result.get("success") is True),
         timed_out=timed_out,
         source=source,
         recording_id=recording_id,
     )
+
+
+def _safe_verifier(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if payload is None:
+        return None
+    allowed = {
+        "success",
+        "wrong_field_count",
+        "wrong_click_count",
+        "action_count",
+        "policy_violations",
+        "duration_ms",
+    }
+    return {key: payload[key] for key in allowed if key in payload}
 
 
 def _site(url: str) -> str:

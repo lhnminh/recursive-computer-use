@@ -81,6 +81,12 @@ verifier must produce measurable evidence.
 - Local-only verifier URL enforcement.
 - Deterministic form demo and read-only evidence dashboard.
 - Offline dashboard fixtures when MongoDB is not available.
+- Headed Chromium capture with raw HAR files kept only under `.recordings/`.
+- Redacted HAR learning into validated, same-site API recipes.
+- Recipe-first execution with cookies, CSRF extraction, scoped redirects, and
+  deterministic verification.
+- Automatic fallback, relearning, versioning, promotion, and retirement when
+  a website API changes.
 
 ## Repository layout
 
@@ -94,6 +100,7 @@ src/recursive_computer_use/
   store.py                 MongoDB run and action persistence
   schema.py                validators, indexes, search indexes for all collections
   learning.py              episodes, sites, skills with lift and retirement
+  recipes.py               API recipe retrieval, lifecycle, and change stream
   verification.py          localhost verifier client
   evolution/
     embedding.py           legacy hash vectors (unused by the runtime)
@@ -102,6 +109,13 @@ src/recursive_computer_use/
     models.py              validated persistence contracts
     policy.py              constrained policy mutation and repository
     runtime.py             two-run evolution coordinator
+  network/
+    capture.py             headed Chromium HAR recording
+    har.py                 filtering and redaction
+    learner.py             HAR-to-recipe model call
+    recipe.py              validated recipe contract
+    runner.py              scoped HTTP replay and verification
+    loop.py                recipe-first fallback and relearning
 demo/
   app.py                   deterministic local form and verifier
 dashboard/
@@ -109,6 +123,7 @@ dashboard/
   fixtures.json            offline before/after demonstration
 scripts/
   setup_atlas.py           runs schema.py (collections and search indexes)
+  network_demo.py          learn, replay, break, and heal judge demo
 tests/
   test_recording.py        action interception and sanitization
   test_store.py            persistence and run lifecycle
@@ -137,6 +152,7 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e .
+python -m playwright install chromium
 Copy-Item .env.example .env
 ```
 
@@ -210,6 +226,49 @@ See `schema.py` and the **Search indexes** section of `AGENTS.md`.
 
 Atlas search indexes provision asynchronously. Until the index is available,
 retrieval safely falls back to recent memories for the same task key.
+
+## Network recipe path
+
+The network path turns one local browser demonstration into a reusable API
+recipe. Raw HAR files remain local and are ignored by Git. Atlas receives only
+redacted recipes, recording metadata, endpoint shapes, and measured outcomes.
+
+Learn from a human demonstration:
+
+```powershell
+python -m recursive_computer_use learn `
+  --url http://127.0.0.1:8765 `
+  --task-key network-checkin `
+  --task "Check in Ada Lovelace with email ada@example.com and city New York."
+```
+
+Chromium opens visibly. Complete the task once. The harness records the flow,
+redacts it, learns a candidate recipe, validates it, and stores it in Atlas.
+
+Run a new task recipe-first:
+
+```powershell
+python -m recursive_computer_use do `
+  --site 127.0.0.1:8765 `
+  --task-key network-checkin `
+  "Check in Grace Hopper with email grace@example.com and city New York."
+```
+
+When `do` finds no working recipe, it opens the headed recording browser and
+uses the local computer-use agent once to teach a replacement. For the `learn`
+command, the default leaves control with the person; add `--agent` only when
+you intentionally want computer use to drive that recording.
+
+For the complete break-and-heal presentation, run:
+
+```powershell
+python scripts/network_demo.py
+```
+
+The script starts the demo server, learns v1, replays three guests, enables the
+redesign, records the failed v1, learns v2, and verifies the healed recipe. It
+uses the disposable `rcu_demo` database and drops it during cleanup. Pass
+`--agent` only to opt into computer use for both recording phases.
 
 ## Quick start without evolution
 
@@ -298,7 +357,7 @@ recursive-computer-use [options] PROMPT
 | Option | Default | Purpose |
 |---|---|---|
 | `PROMPT` | required | Natural-language desktop task |
-| `--model` | `gpt-5.5` | OpenAI-compatible model identifier |
+| `--model` | `gpt-5.6-terra` | OpenAI-compatible model identifier |
 | `--verbose`, `-v` | off | Print model turns, screenshots, and evolution results |
 | `--mongodb-uri` | environment or localhost | Override MongoDB connection URI |
 | `--mongodb-db` | environment or `recursive_computer_use` | Override database name |
@@ -491,6 +550,17 @@ replace separate database credentials for a hostile-writer threat model.
 Stores the full per-task baseline/candidate evidence for a replay suite,
 including split labels and token counts. Holdout cases remain in this audit
 record but never affect the promotion decision.
+
+### API recipe skills and recordings
+
+Recipes live in `skills` with `kind: "api_recipe"`, versioned candidate,
+active, and retired states, parameter definitions, scoped request steps, use
+counts, wins, lift, and failure streak. First verified replay success promotes
+a candidate. Two consecutive verified failures retire an active recipe.
+
+`recordings` stores only the site, redacted task summary, HAR digest, endpoint
+shapes, source, and recipe reference. Raw HAR content, cookies, request bodies,
+and tokens never enter MongoDB.
 
 ## Privacy and safety boundaries
 

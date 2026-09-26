@@ -81,8 +81,11 @@ class RecipeStore:
             recipe.parent_id = recipe.parent_id or latest["_id"]
         recipe.status = "candidate"
         now = _utcnow()
+        recipe_document = recipe.to_dict()
+        for parameter in recipe_document.get("params", []):
+            parameter["example"] = None
         doc = {
-            **recipe.to_dict(),
+            **recipe_document,
             "uses": 0,
             "wins": 0,
             "lift": None,
@@ -125,7 +128,7 @@ class RecipeStore:
         now = _utcnow()
         self.learning.record_episode(
             run_id=f"recipe-{uuid.uuid4().hex}",
-            prompt=task or doc.get("description") or doc["name"],
+            prompt=f"API recipe workflow: {doc['name']}",
             task_key=scope.get("task_key") or doc["name"],
             site=scope.get("site"),
             model="api_recipe",

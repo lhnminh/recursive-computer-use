@@ -9,5 +9,17 @@
 """
 
 from .recipe import Extract, Param, Recipe, RecipeError, Step, render, template_vars
+from .runner import RunResult, StepResult, run_recipe
 
-__all__ = ["Extract", "Param", "Recipe", "RecipeError", "Step", "render", "template_vars"]
+__all__ = [
+    "Extract",
+    "Param",
+    "Recipe",
+    "RecipeError",
+    "RunResult",
+    "Step",
+    "StepResult",
+    "render",
+    "run_recipe",
+    "template_vars",
+]
