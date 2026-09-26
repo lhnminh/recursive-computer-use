@@ -46,7 +46,7 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
       the learner can link a response value to a later request.
 - [x] Unit tests with a small hand-written HAR fixture.
 
-## N4. Learner — done (live demo-API test pending X6)
+## N4. Learner — done
 
 - [x] `network/learner.py`: `learn_recipe(har_path, task, *, site,
       task_key)`. One model call (`gpt-5.6-terra` via `auth.resolve`) with
@@ -58,8 +58,11 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 - [x] `fill_params(recipe, task)`: one small model call that maps the task
       text to param values. Returns only declared param names.
 - [x] Test with a fake OpenAI client and the fixture HAR.
-- [ ] Live test against Codex's demo API once X6 is in: record → learn →
-      Codex's runner succeeds.
+- [x] Live test against the real demo API (headless Playwright, no
+      desktop): record Ada → learn v1 (11 s) → replay for Grace succeeds
+      (2 s fill + 9 ms HTTP) → redesign → 2 × 410 → retired → re-record →
+      v2 learns `/api/v2/check-in` and `name` → Grace succeeds. Script used
+      a stand-in replayer; Codex's runner (X8) replaces it.
 - [x] Live model test on the fixture HAR (`gpt-5.6-terra`): learned the 2-step session → checkin chain with csrf extraction in 11.7 s; `fill_params` 3.9 s.
 
 ## N5. Recipe store — done
