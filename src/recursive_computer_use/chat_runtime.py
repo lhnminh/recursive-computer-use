@@ -1,18 +1,15 @@
-"""Shared runtime helpers for the local Streamlit computer-use chat."""
+"""Shared runtime helpers for the local computer-use chat web UI."""
 
 from __future__ import annotations
 
 import re
-import subprocess
-import sys
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 from urllib.parse import urlparse
 
 
 DEFAULT_MODEL = "gpt-5.6-terra"
-DEFAULT_TASK_KEY = "streamlit-desktop"
+DEFAULT_TASK_KEY = "web-desktop"
 
 _REVIEW_GUARDRAIL = """
 Safety requirement from the user interface: you may navigate, inspect, and
@@ -29,7 +26,6 @@ class ChatOptions:
     model: str = DEFAULT_MODEL
     task_key: str = DEFAULT_TASK_KEY
     verifier_url: str | None = None
-    mongodb_db: str | None = None
     log_actions: bool = True
     evolve: bool = True
     verbose: bool = False
@@ -90,12 +86,41 @@ def execute_task(
         runtime_prompt,
         model=options.model.strip() or DEFAULT_MODEL,
         verbose=options.verbose,
-        mongodb_db=options.mongodb_db or None,
-        log_actions=options.log_actions,
-        task_key=normalize_task_key(options.task_key),
-        verifier_url=verifier_url,
-        evolve=options.evolve and options.log_actions,
+        **_supported_run_options(
+            runner,
+            options=options,
+            verifier_url=verifier_url,
+        ),
     )
+
+
+def _supported_run_options(
+    runner: Callable[..., str],
+    *,
+    options: ChatOptions,
+    verifier_url: str | None,
+) -> dict[str, object]:
+    """Pass optional chat settings only when the runtime supports them.
+
+    The web UI can run against older agent versions while the runtime API is
+    being integrated. MongoDB database selection is environment-owned by the
+    persistence layer and is never an ``agent.run`` argument.
+    """
+
+    import inspect
+
+    parameters = inspect.signature(runner).parameters
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        supported = {"log_actions", "task_key", "verifier_url", "evolve"}
+    else:
+        supported = set(parameters)
+    candidates: dict[str, object] = {
+        "log_actions": options.log_actions,
+        "task_key": normalize_task_key(options.task_key),
+        "verifier_url": verifier_url,
+        "evolve": options.evolve and options.log_actions,
+    }
+    return {key: value for key, value in candidates.items() if key in supported}
 
 
 def safe_error(exc: BaseException) -> str:
@@ -110,21 +135,3 @@ def safe_error(exc: BaseException) -> str:
         text,
     )
     return text[:800]
-
-
-def launch() -> None:
-    """Launch the packaged Streamlit UI on the loopback interface only."""
-
-    app = Path(__file__).with_name("chatbot_app.py")
-    command = [
-        sys.executable,
-        "-m",
-        "streamlit",
-        "run",
-        str(app),
-        "--server.address",
-        "127.0.0.1",
-        "--browser.gatherUsageStats",
-        "false",
-    ]
-    raise SystemExit(subprocess.call(command))
