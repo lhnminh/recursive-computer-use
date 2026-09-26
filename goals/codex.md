@@ -94,3 +94,4 @@ retired skills make a good dashboard panel.
 - X2, `61b1835`, accepted-policy change stream with persisted resume and restart delivery.
 - X3, `f08a8da`, time-series learning curve and graph-lookup policy lineage queries.
 - X4, `c35fc8f`, read-only dashboard panels with Atlas queries and offline fixtures.
+- X5, `9e2ead7`, self-cleaning Atlas demo covering retrieval, feed, validation, and analytics.
