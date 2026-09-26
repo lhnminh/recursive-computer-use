@@ -1,4 +1,4 @@
-# Goals: MongoDB layer
+# Goals: learn tasks from network traffic
 
 Deadline: build window closes **2026-09-26, 10 PM EDT**.
 
@@ -10,62 +10,177 @@ Two agents work on this at the same time:
 Each agent owns a different set of files. If both agents follow the rules
 below, they never edit the same file.
 
+## The pivot (decided 2026-09-26, 1:30 PM)
+
+A judge suggested it, and the team agreed: stop clicking buttons as the main
+path. Learn the website's network calls instead.
+
+1. **Do it once.** A person, or the computer-use agent, does the task in a
+   browser that records all network traffic (a HAR file).
+2. **Learn.** The harness reads the redacted traffic and writes an
+   **API recipe**: the chain of HTTP requests, which values are task
+   parameters, and which values come from earlier responses (CSRF tokens,
+   ids). The recipe is saved in Atlas as a `candidate` skill.
+3. **Do it again, fast.** A new task finds a recipe by meaning (Voyage +
+   `$rankFusion`), fills the parameters, and replays the requests. No screen,
+   no clicks. The verifier decides success.
+4. **Heal.** When the site changes, the replay fails. Lift drops, the recipe
+   retires, computer use does the task once more in the recording browser,
+   and the harness learns version 2. A change stream pushes it to every
+   agent.
+
+Computer use stays. It is the teacher and the fallback: it gets the task
+done when no recipe exists or a recipe breaks.
+
+Demo story for the judges: first run slow (computer use, many model calls),
+later runs fast (API recipe, one small model call), redesign heals itself.
+
 ## Team
 
 | Person | Area |
 |---|---|
-| Adarsha | MongoDB layer (this plan) |
+| Adarsha | MongoDB layer and the learner (this plan) |
 | Minh | Computer-use agent: `agent.py`, `sandbox.py`, `verification.py` |
-
-Adarsha also owns the MongoDB hooks inside Minh's `agent.py` (the learning
-layer calls). Keep those edits small.
 | AJ | CI/CD |
 
-## Where we are
+Adarsha also owns the MongoDB hooks inside `agent.py`. Keep those edits small.
 
-The harness evolves a **policy** per `task_key`. A verified failure becomes an
-**experience** (summary, lesson, embedding). The engine proposes a candidate
-policy. The next verified run accepts or rejects it and writes an
-**evaluation**.
+## Phase 1 status (done before the pivot)
 
-Every run also feeds the **learning layer** (`learning.py`): one
-**episode** per run, its **site**, and one **skill** per policy rule with
-`uses`, `wins` and `lift`. Skills with negative lift retire.
+Schema, Voyage retrieval, `$rankFusion`, learning layer (episodes, sites,
+skills with lift), atomic policy decisions, policy feed, analytics, dashboard
+panels, `scripts/atlas_demo.py`. All pushed. See git log.
 
-MongoDB collections the code uses today:
+## Recipe contract (both agents code to this)
 
-| Collection | Written by | Shape defined in |
-|---|---|---|
-| `runs`, `actions` | `store.py` | `store.py` |
-| `experiences` | `evolution/memory.py` | `Experience.to_document()` in `evolution/models.py` |
-| `policies` | `evolution/policy.py` | `HarnessPolicy.to_document()` |
-| `evaluations` | `evolution/policy.py` | `EvaluationRecord.to_document()` |
-| `episodes`, `sites`, `skills` | `learning.py` (called from `agent.py`) | `schema.py` |
-| `page_templates`, `site_map`, `exam` | nothing yet (kept for the web agent) | `schema.py` |
-| `run_metrics` (time series), `agent_state` | Codex X2/X3 | `schema.py` |
+The recipe is a skill document with `kind: "api_recipe"`. The Python type is
+`network.recipe.Recipe` (Claude writes it first, task N1). JSON shape:
 
-All validators, indexes and search indexes live in `schema.py`. Run
-`uv run python -m recursive_computer_use.schema` (or
-`scripts/setup_atlas.py`) after any change.
+```json
+{
+  "name": "127.0.0.1:8765:checkin",
+  "kind": "api_recipe",
+  "status": "candidate",
+  "version": 1,
+  "parent_id": null,
+  "description": "Check in a guest with full name, email and city.",
+  "scope": {"site": "127.0.0.1:8765", "task_key": "local-checkin"},
+  "params": [
+    {"name": "full_name", "description": "Guest full name", "example": "Ada Lovelace"}
+  ],
+  "steps": [
+    {
+      "id": "session",
+      "method": "GET",
+      "url": "http://127.0.0.1:8765/api/session",
+      "headers": {},
+      "body": null,
+      "expect_status": 200,
+      "extract": [{"var": "csrf", "from": "json", "path": "csrf"}]
+    },
+    {
+      "id": "checkin",
+      "method": "POST",
+      "url": "http://127.0.0.1:8765/api/checkin",
+      "headers": {"content-type": "application/json", "x-csrf-token": "{{csrf}}"},
+      "body": {"full_name": "{{full_name}}", "email": "{{email}}", "city": "{{city}}"},
+      "expect_status": 200,
+      "extract": []
+    }
+  ],
+  "verify": {"url": "http://127.0.0.1:8765/api/result"}
+}
+```
 
-Done (Claude, C1 + C2):
+Rules:
 
-- All collections exist in Atlas with validators (warn mode) and indexes.
-- All embeddings use Voyage `voyage-4` through Atlas Automated Embedding.
-  The harness no longer computes the 64-number hash vector. READY indexes:
-  `experiences.experience_auto` (`lesson`), `experiences.experience_text`,
-  `skills.skill_auto` (`description`), `episodes.episode_auto` (`task`),
-  `page_templates.template_auto` (`summary`).
-- `agent.py` writes an episode, site and skills for every run.
+- `{{name}}` is replaced by a param or by a var extracted in an earlier step.
+  Templates may appear in `url`, header values, and body string values.
+- `extract.from` is one of `json` (dotted path), `header`, `cookie`, or
+  `regex` (first group, on the response body).
+- Cookies are kept by the runner's cookie jar. Recipes never contain cookie
+  values.
+- Recipes never contain secrets, session ids, or example values from the
+  recording except in `params[].example`.
+- The runner only calls hosts in `scope.site`. No redirects to other hosts.
 
-Open gaps:
+## Function contract
 
-1. `record_evaluation` writes two documents without a transaction (X1).
-2. Nothing pushes a newly accepted policy to a running agent (X2).
-3. No metrics history or learning-curve query for the demo (X3).
-4. Lesson ranking is similarity only; no `$rankFusion` yet (C3).
-5. `tests/test_store.py::test_connect_and_run_lifecycle` fails on `main`: it
-   expects `final_text`, `store.py` now writes `final_summary`. Minh's.
+Claude provides:
+
+```python
+network.recipe.Recipe                      # dataclass, from_dict/to_dict, validate()
+network.recipe.render(template, values)    # {{var}} substitution, shared with the runner
+network.har.load_exchanges(har_path) -> list[Exchange]   # filtered + redacted
+network.learner.learn_recipe(har_path, task, *, site, task_key) -> Recipe
+network.learner.fill_params(recipe, task) -> dict[str, str]
+recipes.RecipeStore(db)
+    .save_candidate(recipe, *, recording_id=None) -> ObjectId
+    .find_for_task(task, *, site=None, limit=3) -> list[Recipe]   # $rankFusion
+    .record_result(recipe_id, *, ok, run_ms, steps) -> None       # uses/wins/lift, promote/retire
+    .supersede(old_id, new_recipe) -> ObjectId                    # version + 1, parent_id
+    .watch(on_recipe) -> stop_fn                                  # change stream, resume token
+```
+
+Codex provides:
+
+```python
+network.capture.record(url, *, task, har_path, agent_prompt=None, timeout_s=300) -> CaptureResult
+network.runner.run_recipe(recipe, params) -> RunResult   # ok, steps[{id, status, ms}], vars, error
+network.loop.do_task(task, *, site, task_key) -> dict    # recipe first, computer-use fallback, relearn
+```
+
+## Checkpoints
+
+| Time (EDT) | What works |
+|---|---|
+| 3:30 PM | Demo site has a real API. A human recording becomes a HAR. N1 + N2 done. |
+| 5:00 PM | HAR → recipe → Atlas → replay succeeds with new params. |
+| 7:00 PM | `do_task` loop: recipe first, fallback, relearn. Dashboard shows it. |
+| 8:30 PM | Redesign switch heals end to end. Change stream demo. |
+| 9:00 PM | Code freeze. Rehearse the demo. Only fixes after this. |
+
+## File ownership
+
+| File | Owner |
+|---|---|
+| `src/recursive_computer_use/network/__init__.py` | Claude (create first) |
+| `network/recipe.py`, `network/har.py`, `network/learner.py` | Claude |
+| `src/recursive_computer_use/recipes.py` | Claude |
+| `schema.py`, `learning.py`, `evolution/memory.py`, `scripts/setup_atlas.py` | Claude |
+| `tests/test_recipe.py`, `tests/test_har.py`, `tests/test_learner.py`, `tests/test_recipes_atlas.py`, `tests/test_learning_atlas.py` | Claude |
+| `network/capture.py`, `network/runner.py`, `network/loop.py` | Codex |
+| `demo/app.py` | Codex |
+| `dashboard/app.py`, `scripts/atlas_demo.py`, `scripts/network_demo.py` (new) | Codex |
+| `src/recursive_computer_use/__init__.py` (new CLI commands only) | Codex |
+| `pyproject.toml`, `uv.lock` (add `playwright`) | Codex |
+| `.gitignore` (add `.recordings/`) | Codex |
+| `tests/test_runner.py`, `tests/test_capture.py`, `tests/test_loop.py`, `tests/test_demo_api.py` | Codex |
+| `evolution/*` except `memory.py` | Codex (evolution lane) |
+| `sandbox.py`, `verification.py`, `store.py`, `auth.py`, rest of `agent.py` | Minh. Do not edit. |
+| CI files | AJ. Do not edit. |
+
+## Rules for both agents
+
+- Edit only the files you own. If you need a change in another file, write it
+  under **Requests** at the end of this file and continue with other work.
+- Stage files by path. Never `git add -A` or `git add .`: both agents share
+  one working tree.
+- Run `git pull --rebase --autostash` right before every push.
+- Make small commits, one task per commit. Push after each task.
+- Never commit `.env`, HAR files, or `.recordings/`. HAR files hold cookies
+  and form data. They stay on the local disk only.
+- Never write raw HAR content, cookies, or tokens to MongoDB. Only redacted
+  recipes and recording metadata.
+- Keep existing tests green: `uv run python -m unittest discover -s tests`.
+- Atlas integration tests: gate on `RCU_ATLAS_TESTS=1`, use your own scratch
+  database (`rcu_test_claude` or `rcu_test_codex`), drop it at the end.
+- Model: use `gpt-5.6-terra` through the Codex proxy. `gpt-5.5` fails on our
+  account. The proxy rejects image blocks with an explicit `detail` field.
+- Do not run the computer-use agent on the real desktop without asking
+  Adarsha first. It takes over the mouse and keyboard.
+- Do not use Ollama.
+- When you finish a task, tick its box in your file.
 
 ## Atlas facts (tested 2026-09-26 on our cluster)
 
@@ -73,115 +188,33 @@ Cluster runs MongoDB **8.0.32**.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Automated Embeddings (`autoEmbed`, `voyage-4`) | Works | Index READY in ~2 min. Query: `"query": {"text": "..."}, "model": "voyage-4"`. |
-| Vector Search filter fields | Works | Add `{"type": "filter", "path": "task_key"}` to the index. |
-| `$rankFusion` | Works | Vector + `$search` + `$match`/`$sort` pipelines, with weights. |
-| `$scoreFusion` | **Fails** | Needs 8.2+. Use `$rankFusion`. |
-| Change streams + resume tokens | Works | Resume after disconnect catches missed events. |
-| `$jsonSchema` error mode | Works | |
-| `$inc`, transactions | Works | |
-| Time series collections | Works | |
-| TTL indexes | Works | Deletes in 30-60 s. |
-| LangGraph `MongoDBSaver` | Works | Not needed for this plan. |
-
-Search indexes (`vectorSearch`, `search`) build asynchronously. Poll
-`list_search_indexes()` until `status == "READY"` before you query.
-
-## File ownership
-
-| File | Owner |
-|---|---|
-| `src/recursive_computer_use/schema.py` | Claude |
-| `src/recursive_computer_use/learning.py` | Claude |
-| `src/recursive_computer_use/agent.py` (learning hooks only) | Claude |
-| `scripts/setup_atlas.py` | Claude |
-| `src/recursive_computer_use/evolution/memory.py` | Claude |
-| `src/recursive_computer_use/evolution/embedding.py` | Claude |
-| `src/recursive_computer_use/evolution/runtime.py` | Claude (only the `find_similar` call) |
-| `tests/test_learning_atlas.py` | Claude |
-| `src/recursive_computer_use/evolution/policy.py` | Codex |
-| `src/recursive_computer_use/evolution/feed.py` (new) | Codex |
-| `src/recursive_computer_use/evolution/analytics.py` (new) | Codex |
-| `dashboard/app.py` | Codex |
-| `scripts/atlas_demo.py` (new) | Codex |
-| `tests/test_policy_tx.py`, `tests/test_feed.py`, `tests/test_analytics.py` | Codex |
-| `sandbox.py`, `verification.py`, `store.py`, `__init__.py`, rest of `agent.py` | Minh. Do not edit. |
-| `evolution/models.py`, `evolution/evaluator.py` | Shared. Do not edit without a note below. |
-| CI files | AJ. Do not edit. |
-
-## Rules for both agents
-
-- Edit only the files you own. If you need a change in another file, write it
-  under **Requests** at the end of this file and continue with other work.
-- Run `git pull --rebase` before every commit. Teammates push often.
-- Make small commits, one task per commit. Push after each task.
-- Never commit `.env` or print `MONGODB_URI`.
-- Keep the harness working with no Atlas: every Atlas feature needs a
-  fallback, as `ExperienceMemory.find_similar` already does.
-- Keep existing tests green: `uv run pytest`.
-- For integration tests against Atlas, use your own database:
-  `MONGODB_DB=rcu_test_claude` or `MONGODB_DB=rcu_test_codex`. Drop it at the
-  end of the test. Never write test data to `recursive_computer_use`.
-- Do not use Ollama.
-- When you finish a task, tick its box in your file.
-
-## Contract between the two agents
-
-Codex code reads these fields. Claude must not rename them:
-
-- `policies`: `task_key`, `version`, `parent_version`, `status`
-  (`candidate` / `accepted` / `rejected`), `created_at`.
-- `evaluations`: `task_key`, `candidate_policy_version`, `decision`,
-  `baseline_metrics`, `candidate_metrics`, `created_at`.
-- `experiences`: `task_key`, `outcome`, `policy_version`, `metrics`,
-  `lesson`, `created_at`. No `embedding` on new documents.
-- `episodes`: `run_id`, `task`, `task_key`, `site`, `outcome` (`success`,
-  `failure`, `unverified`, `timeout`, `error`, `interrupted`),
-  `policy_version`, `metrics`, `skills_used[].skill_id`, `llm_calls`,
-  `tokens_in`, `tokens_out`, `duration_ms`, `started_at`.
-- `skills`: `name`, `status` (`candidate`, `active`, `retired`),
-  `description`, `scope.task_key`, `uses`, `wins`, `lift`.
-
-Collections for Codex (created, empty, in Atlas now):
-
-- `run_metrics`: time series. `timeField: "ts"`, `metaField: "meta"`.
-  Point: `{ts, meta: {task_key, policy_version, run_id}, success_rate,
-  wrong_clicks, wrong_field_entries, policy_violations, action_count,
-  duration_ms}`.
-- `agent_state`: `{_id: agent_id (string), resume_token (object or null),
-  updated_at (date)}`.
-
-Voyage retrieval helpers Codex can call (read-only):
-`ExperienceMemory.find_similar(task_key, query_text=...)`,
-`LearningStore.similar_skills(text, task_key=...)`,
-`LearningStore.similar_episodes(text, site=...)`.
+| Automated Embeddings (`autoEmbed`, `voyage-4`) | Works | Query: `"query": {"text": "..."}, "model": "voyage-4"`. |
+| Vector Search filter fields | Works | |
+| `$rankFusion` | Works | Input pipelines allow only `$search`, `$vectorSearch`, `$match`, `$sort`, `$limit`, `$skip`, `$sample`, `$geoNear`. No `$lookup`. |
+| `$scoreFusion` | **Fails** | Needs 8.2+. |
+| Change streams + resume tokens | Works | |
+| `$jsonSchema`, transactions, time series, TTL | Work | |
 
 ## Manual steps for Adarsha (Atlas UI)
 
-- [ ] Create a read-only database user for the dashboard (`read` role on
-      `recursive_computer_use`).
-- [ ] Optional: a custom role that can insert into `evaluations` but not
-      update or delete. This makes the grader history append-only.
+- [ ] Create a read-only database user for the dashboard.
+- [ ] Optional: insert-only role on `evaluations`.
 
 ## Requests
 
 <!-- Agent A needs something from agent B: add a line here. -->
 
-- Claude: accepted/default policy rules need a protected marker and must not be
-  auto-retired from observational lift alone. Retire learned heuristics only
-  after a replay ablation shows no regression; keep safety invariants outside
-  the prunable set.
-- Minh: the new `evolution.replay.evaluate_replay_suite` gate is ready for a
-  future multi-task runner. Do not pass held-out cases into promotion. The
-  existing two-run runtime should keep its current behavior until task split
-  and replay orchestration are explicit.
+- Minh: `agent.run` should accept an already-open browser: the capture step
+  opens a recording Chromium window and then calls the agent with the task.
+  The agent must work inside that window, not open a new browser.
+- Minh: default model `gpt-5.5` fails on our Codex account. Use
+  `gpt-5.6-terra`. `agent.py` has an uncommitted fix that drops
+  `"detail": "high"` from image blocks (the proxy rejects it). Review and
+  commit it.
 - Minh: wire the accepted-policy feed into the running agent when ready:
-  `feed = PolicyFeed(db, agent_id)`
-  `feed.watch(task_key, on_policy)`
-  `feed.stop()`
-- Minh: call `record_metrics` after each verified run:
-  `record_metrics(db, task_key, policy_version, metrics)`
-- Minh (FYI, done by Claude 2026-09-26): `agent.py` now uses
-  `recovery.RecoveryMonitor`. Stuck runs get hints, then abort. A failed
-  verification sends the model back up to `retry_limit` times. Every ending
-  except an interrupt runs the verifier. `sandbox.py` is untouched.
+  `feed = PolicyFeed(db, agent_id)`, `feed.watch(task_key, on_policy)`,
+  `feed.stop()`.
+- Minh: the replay gate `evolution.replay.evaluate_replay_suite` is ready for
+  a multi-task runner. Do not pass held-out cases into promotion.
+- Claude (open): accepted/default policy rules need a protected marker and
+  must not be auto-retired from observational lift alone.

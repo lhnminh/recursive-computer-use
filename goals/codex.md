@@ -1,98 +1,88 @@
-# Codex's goals: live updates, analytics and demo
+# Codex's goals: demo API, capture, runner, loop
 
-Read [`GOALS.md`](GOALS.md) first. It has the rules, file ownership and
-Atlas facts.
+Read [`GOALS.md`](GOALS.md) first. It has the pivot, the recipe contract,
+checkpoints, rules and file ownership.
 
-Your files: `evolution/policy.py`, `evolution/feed.py` (new),
-`evolution/analytics.py` (new), `dashboard/app.py`, `scripts/atlas_demo.py`
-(new), and your tests.
+Your files: `network/capture.py`, `network/runner.py`, `network/loop.py`,
+`demo/app.py`, `dashboard/app.py`, `scripts/atlas_demo.py`,
+`scripts/network_demo.py`, new CLI commands in `__init__.py`,
+`pyproject.toml`, `uv.lock`, `.gitignore`, `evolution/*` except
+`memory.py`, and your tests.
 
-Start with X1. It does not depend on Claude. X2 and X3 need Claude's task
-C1. **C1 is done**: `run_metrics` and `agent_state` exist in Atlas. Check
-`GOALS.md` → **Contract** for their shapes. Create them in your
-`rcu_test_codex` database with `ensure_schema(db)` from `schema.py`.
+Claude creates `network/__init__.py` and `network/recipe.py` first (N1).
+Until N1 is pushed, write against the JSON shape in `GOALS.md` and import
+`Recipe` once it lands. Do not create `network/__init__.py` yourself.
 
-The learning layer (`learning.py`) now writes `episodes`, `sites` and
-`skills` with `lift`. X3 and X4 can show those too: the lift per skill and
-retired skills make a good dashboard panel.
+## X6. Demo site with a real API (first, ~45 min)
 
-## X1. Atomic policy decisions (~30 min)
+The form now trusts the browser's `submit` event. A replay could fake
+success. Move the decision to the server.
 
-- [x] In `PolicyRepository.record_evaluation`, write the evaluation and
-      update the policy status in one transaction. Use a session when the
-      collection supports it. Fall back to the current two writes for test
-      doubles and standalone MongoDB.
-- [x] Guard the status change: update only if `status` is still
-      `candidate`. If no document matched, abort. Another agent decided
-      first.
-- [x] In `PolicyRepository.save`, catch `DuplicateKeyError` on
-      (`task_key`, `version`). Two agents proposed the same version. Return
-      a clear result instead of crashing.
-- [x] Test against `rcu_test_codex`: an aborted transaction leaves no
-      evaluation and no status change.
+- [ ] `GET /api/session` → `{"csrf": "<random>"}` and a `sid` cookie.
+- [ ] `POST /api/checkin` with JSON `{full_name, email, city}` and header
+      `X-CSRF-Token`. The server checks csrf + sid and the values, then sets
+      `success`. Wrong csrf → 403.
+- [ ] The page's JS uses these two endpoints, so a recording captures them.
+- [ ] Keep `/api/result` and `/api/reset` as they are. Keep the event
+      metrics for the computer-use path.
+- [ ] Accept any guest, not only Ada: the page shows the expected values
+      per reset (`POST /api/reset {"guest": {...}}` sets them). So a replay
+      with new params is a real test.
+- [ ] Redesign switch: `POST /api/redesign {"on": true}` moves the call to
+      `POST /api/v2/check-in`, renames `full_name` → `name`, and the old
+      endpoint returns 410. The page's JS follows the switch.
+- [ ] Tests in `tests/test_demo_api.py`.
 
-## X2. Live policy feed with change streams (~45 min)
+## X7. Capture (~45 min)
 
-- [x] New `evolution/feed.py`: `PolicyFeed(db, agent_id)`.
-      - `watch(task_key, on_policy)` opens a change stream on `policies`
-        filtered to `status: "accepted"` for that `task_key`.
-      - After each event, save the resume token to `agent_state`
-        (`{_id: agent_id, resume_token, updated_at}`).
-      - On start, resume from the saved token, so a restarted agent catches
-        up on policies accepted while it was down.
-      - Run in a background thread. Stop cleanly.
-- [x] If change streams are not available, return a no-op feed and log one
-      warning.
-- [x] Test: start feed, accept a policy, receive it. Stop feed, accept
-      another, restart feed, receive the missed one.
-- [x] Do not wire this into `runtime.py` or `agent.py`. Add a request for
-      Minh under **Requests** in `GOALS.md` with a 3-line usage example.
+- [ ] Add `playwright` to `pyproject.toml`. Document
+      `uv run playwright install chromium`.
+- [ ] Add `.recordings/` to `.gitignore`.
+- [ ] `network/capture.py`: `record(url, *, task, har_path,
+      agent_prompt=None, timeout_s=300)`. Headed Chromium with
+      `record_har_path`. Without `agent_prompt`, a person does the flow.
+      With it, call `agent.run(...)` so computer use does it in that window
+      (see the Minh request in `GOALS.md`). Stop when the verifier reports
+      success or on timeout. Return path, duration, verifier result.
+- [ ] Write only metadata to Atlas (`recordings` collection, Claude's N2).
+- [ ] Do not run the computer-use path on the real desktop without asking
+      Adarsha.
 
-## X3. Metrics history and learning curve (~45 min)
+## X8. Runner (~45 min)
 
-- [x] New `evolution/analytics.py`:
-      - `record_metrics(db, task_key, policy_version, metrics)` inserts one
-        point into `run_metrics`.
-      - `learning_curve(db, task_key)` is one aggregation. It returns, per
-        policy version in order: runs, mean `success_rate`, mean
-        `action_count`, total `policy_violations`, and the decision from
-        `evaluations`.
-      - `policy_lineage(db, task_key)` uses `$graphLookup` on `policies`
-        (`parent_version` → `version`) to return the chain from v1 to the
-        latest accepted policy.
-- [x] Add a request for Minh in `GOALS.md` to call `record_metrics` after
-      each verified run.
-- [x] Test against `rcu_test_codex` with seeded data.
-- [x] `agent.py` calls `record_metrics` after each verified run.
+- [ ] `network/runner.py`: `run_recipe(recipe, params) -> RunResult`.
+      Standard library `urllib` + `http.cookiejar`. Render `{{var}}` with
+      Claude's `network.recipe.render`.
+- [ ] Apply `extract` rules after each step. Stop at the first step whose
+      status is not `expect_status`.
+- [ ] Only call hosts in `scope.site`. No redirects off-site. Timeout per
+      step 10 s.
+- [ ] Then GET `recipe.verify.url` and return its verdict.
+- [ ] Tests against a local `ThreadingHTTPServer` fixture.
 
-## X4. Dashboard shows the Atlas features (~45 min)
+## X9. The loop (~60 min)
 
-- [x] In `dashboard/app.py`, add panels for:
-      - the learning curve from X3,
-      - the policy lineage from X3,
-      - the top lessons for a query. Call Claude's
-        `ExperienceMemory.find_similar(..., query_text=...)` from C2 and C3.
-        If it is not merged yet, show the recent-lessons fallback.
-- [x] Keep the fixture fallback for when Atlas is down.
-- [x] Keep the dashboard read-only. It must work with a `read`-role user.
+- [ ] `network/loop.py`: `do_task(task, *, site, task_key)`:
+      1. `RecipeStore.find_for_task` → best recipe.
+      2. `fill_params` → `run_recipe` → `record_result`.
+      3. No recipe, or it failed: capture with computer use (or a person),
+         `learn_recipe`, `save_candidate` or `supersede`, then replay once
+         to verify.
+      Return what happened and timings for each path.
+- [ ] CLI: `recursive-computer-use learn --url URL --task "..."` and
+      `recursive-computer-use do --site HOST "task"`.
+- [ ] Tests with fakes for store, learner and runner.
 
-## X5. Judge-facing demo script (~30 min)
+## X10. Dashboard and judge demo (~45 min)
 
-- [x] New `scripts/atlas_demo.py`. It runs against a scratch database
-      `rcu_demo` and prints one clear section per feature:
-      1. Voyage `autoEmbed` finds a lesson by meaning, not by words.
-      2. `$rankFusion` ranks useful lessons above merely similar ones.
-      3. A change stream delivers an accepted policy to a second agent.
-      4. `$jsonSchema` rejects a bad policy.
-      5. The learning curve and lineage aggregations.
-- [x] It waits for search indexes to be READY and cleans up at the end.
-- [x] One command: `uv run python scripts/atlas_demo.py`.
+- [ ] Dashboard panel: recipes per site with version, status, uses, wins,
+      lift, and the call chain (`site_map` via `$graphLookup`).
+- [ ] Panel: time and model calls per run, computer use vs recipe.
+- [ ] `scripts/network_demo.py`: reset → learn from one recording → run 3
+      new guests by recipe → flip redesign → replay fails → relearn → v2
+      works. Print timings. Uses a scratch database.
 
 ## Done log
 
 <!-- One line per finished task: task id, commit hash, one-line result. -->
-- X1, `7a1e860`, atomic verdict/status update, duplicate save result, Atlas rollback check.
-- X2, `61b1835`, accepted-policy change stream with persisted resume and restart delivery.
-- X3, `f08a8da`, time-series learning curve and graph-lookup policy lineage queries.
-- X4, `c35fc8f`, read-only dashboard panels with Atlas queries and offline fixtures.
-- X5, `9e2ead7`, self-cleaning Atlas demo covering retrieval, feed, validation, and analytics.
+- Phase 1: X1 `7a1e860`, X2 `61b1835`, X3 `f08a8da`, X4 `c35fc8f`, X5 `9e2ead7`.
