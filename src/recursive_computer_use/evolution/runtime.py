@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from .embedding import embed_text
 from .evaluator import evaluate_candidate
 from .memory import ExperienceMemory, lessons_from
 from .models import EvaluationMetrics, Experience, HarnessPolicy, redact_text
@@ -91,7 +90,7 @@ class EvolutionRuntime:
             lesson=lesson,
             policy_version=policy.version,
             metrics=metrics.to_document(),
-            embedding=tuple(embed_text(f"{policy.task_key} {summary} {lesson}")),
+            # No client-side vector: Atlas embeds ``lesson`` with Voyage on write.
         )
         self.memory.store(experience)
 
@@ -130,7 +129,7 @@ class EvolutionRuntime:
     ) -> dict[str, Any]:
         memories = self.memory.find_similar(
             parent.task_key,
-            embedding=experience.embedding,
+            query_text=f"{experience.summary} {experience.lesson}",
             limit=3,
         )
         learned_lessons = lessons_from(memories)

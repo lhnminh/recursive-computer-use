@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping, Sequence
 
-from .models import Experience, EvolutionValidationError, validate_task_key
+from .models import Experience, EvolutionValidationError, redact_text, validate_task_key
 
 
 class ExperienceMemory:
@@ -20,10 +20,18 @@ class ExperienceMemory:
         *,
         vector_index: str = "experience_embedding",
         vector_path: str = "embedding",
+        text_index: str = "experience_auto",
+        text_path: str = "lesson",
+        text_model: str = "voyage-4",
     ) -> None:
         self.collection = collection
         self.vector_index = vector_index
         self.vector_path = vector_path
+        # Atlas Automated Embedding: Atlas embeds ``text_path`` with Voyage on
+        # write and embeds the query text on search. See schema.SEARCH_INDEXES.
+        self.text_index = text_index
+        self.text_path = text_path
+        self.text_model = text_model
 
     def store(self, experience: Experience) -> Any:
         """Insert one already-validated, privacy-filtered experience."""
@@ -34,44 +42,56 @@ class ExperienceMemory:
         self,
         task_key: str,
         *,
-        embedding: Sequence[float] | None,
+        embedding: Sequence[float] | None = None,
         limit: int = 3,
+        query_text: str | None = None,
     ) -> list[dict[str, Any]]:
         """Find relevant memories, falling back to recent task memories.
 
-        Atlas Vector Search is attempted when a query vector is available.
-        Local MongoDB, test doubles, and Atlas deployments without a configured
-        vector index automatically use a deterministic recent-first query.
+        With ``query_text``, Atlas Vector Search embeds it with Voyage and
+        searches the auto-embedded ``lesson`` field. Otherwise a precomputed
+        query vector is used when available. Local MongoDB, test doubles, and
+        Atlas deployments without the index use a recent-first query.
         """
 
         task_key = validate_task_key(task_key)
         if not isinstance(limit, int) or not 1 <= limit <= 20:
             raise EvolutionValidationError("limit must be an integer from 1 to 20")
 
+        if query_text:
+            try:
+                matches = list(
+                    self.collection.aggregate(
+                        self._search_pipeline(
+                            index=self.text_index,
+                            path=self.text_path,
+                            query={
+                                "query": {"text": redact_text(query_text, field_name="query_text")},
+                                "model": self.text_model,
+                            },
+                            task_key=task_key,
+                            limit=limit,
+                        )
+                    )
+                )
+                if matches:
+                    return matches
+            except Exception:
+                # Same contract as the vector path: never disable the harness.
+                pass
+
         if embedding is not None:
             vector = [float(value) for value in embedding]
             if not vector or len(vector) > 4096:
                 raise EvolutionValidationError("embedding must contain 1-4096 numbers")
             try:
-                pipeline = [
-                    {
-                        "$vectorSearch": {
-                            "index": self.vector_index,
-                            "path": self.vector_path,
-                            "queryVector": vector,
-                            "numCandidates": max(20, limit * 10),
-                            "limit": limit,
-                            "filter": {"task_key": task_key},
-                        }
-                    },
-                    {
-                        "$project": {
-                            "_id": 0,
-                            "embedding": 0,
-                            "score": {"$meta": "vectorSearchScore"},
-                        }
-                    },
-                ]
+                pipeline = self._search_pipeline(
+                    index=self.vector_index,
+                    path=self.vector_path,
+                    query={"queryVector": vector},
+                    task_key=task_key,
+                    limit=limit,
+                )
                 matches = list(self.collection.aggregate(pipeline))
                 if matches:
                     return matches
@@ -81,6 +101,35 @@ class ExperienceMemory:
                 pass
 
         return self._recent_for_task(task_key, limit)
+
+    @staticmethod
+    def _search_pipeline(
+        *,
+        index: str,
+        path: str,
+        query: Mapping[str, Any],
+        task_key: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "$vectorSearch": {
+                    "index": index,
+                    "path": path,
+                    **query,
+                    "numCandidates": max(20, limit * 10),
+                    "limit": limit,
+                    "filter": {"task_key": task_key},
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "embedding": 0,
+                    "score": {"$meta": "vectorSearchScore"},
+                }
+            },
+        ]
 
     def _recent_for_task(self, task_key: str, limit: int) -> list[dict[str, Any]]:
         projection = {"_id": 0, "embedding": 0}

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timezone
 from typing import Any
 
 from openai import OpenAI
@@ -24,6 +25,7 @@ from openai import OpenAI
 from .auth import resolve as resolve_auth
 from .evolution.models import EvaluationMetrics, HarnessPolicy
 from .evolution.runtime import DEFAULT_LIMITS, DEFAULT_RULES, EvolutionRuntime
+from .learning import LearningStore
 from .sandbox import Sandbox
 from .store import ActionStore
 from .verification import fetch_local_metrics
@@ -161,6 +163,14 @@ def run(
     if hasattr(sandbox, "apply_policy"):
         sandbox.apply_policy(policy)
 
+    # Learning layer: episodes, sites and skills (see learning.py).
+    started_at = datetime.now(timezone.utc)
+    learning = LearningStore.for_store(action_store) if evolve else None
+    skills_used = learning.sync_policy_skills(policy) if learning else []
+    verified_metrics: EvaluationMetrics | None = None
+    llm_calls = tokens_in = tokens_out = 0
+    timed_out = False
+
     policy_text = "\n".join(f"- {rule}" for rule in policy.rules)
     messages: list[dict[str, Any]] = [
         {
@@ -186,6 +196,10 @@ def run(
                 tools=[EXEC_PY_TOOL],
                 messages=messages,
             )
+            llm_calls += 1
+            usage = getattr(response, "usage", None)
+            tokens_in += int(getattr(usage, "prompt_tokens", 0) or 0)
+            tokens_out += int(getattr(usage, "completion_tokens", 0) or 0)
 
             choice = response.choices[0]
             msg = choice.message
@@ -216,6 +230,7 @@ def run(
                             ),
                             duration_ms=verified.duration_ms,
                         )
+                        verified_metrics = metrics
                         evolution_result = (
                             evolution_runtime.record_verified_run(policy, metrics)
                             if evolution_runtime is not None
@@ -243,6 +258,7 @@ def run(
                 return final_text
 
             if turn == MAX_TURNS:
+                timed_out = True
                 raise RuntimeError(
                     f"Reached the {MAX_TURNS}-turn limit without a final answer."
                 )
@@ -294,10 +310,38 @@ def run(
         raise
     finally:
         action_store.finish_run(run_id, status, final_text)
+        if learning is not None:
+            learning.record_episode(
+                run_id=run_id,
+                prompt=prompt,
+                task_key=task_key,
+                model=model,
+                outcome=_episode_outcome(status, verified_metrics, timed_out),
+                started_at=started_at,
+                policy_version=policy.version,
+                metrics=verified_metrics.to_document() if verified_metrics else None,
+                skills_used=skills_used,
+                llm_calls=llm_calls,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+            )
         if owns_store:
             action_store.close()
 
     raise RuntimeError("Agentic loop exited unexpectedly.")
+
+
+def _episode_outcome(
+    status: str, metrics: EvaluationMetrics | None, timed_out: bool
+) -> str:
+    """Map a run's end state to an episode outcome. Only a verifier says success."""
+    if metrics is not None:
+        return "success" if metrics.success_rate >= 1.0 else "failure"
+    if status == "completed":
+        return "unverified"
+    if status == "interrupted":
+        return "interrupted"
+    return "timeout" if timed_out else "error"
 
 
 def _build_tool_content(
