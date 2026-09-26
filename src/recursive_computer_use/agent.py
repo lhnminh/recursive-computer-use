@@ -26,6 +26,7 @@ from openai import OpenAI
 from .auth import resolve as resolve_auth
 from .guides import GuideStore, Guide, Step, detect_env
 from .sandbox import Sandbox
+from .store import ActionStore
 
 # Maximum round-trips before we give up.
 MAX_TURNS = 30
@@ -186,8 +187,9 @@ def run(
     replay_guides:
         When True, attempt to replay a matching saved guide before navigation.
     guide_store:
-        Optional pre-built :class:`GuideStore`. When omitted, a local-only
-        store is opened (MongoDB wiring is layered in separately).
+        Optional pre-built :class:`GuideStore`. When omitted and guide
+        capture/replay is enabled, MongoDB is used when configured and the
+        local JSON store remains available as a fallback.
 
     Returns
     -------
@@ -216,7 +218,11 @@ def run(
 
     store = guide_store
     if (use_guides or replay_guides) and store is None:
-        store = GuideStore.open(None, verbose=verbose)  # local-only by default
+        # Use the configured MongoDB database for shared guides, with the
+        # GuideStore's local JSON file as a fallback/warm cache.
+        mongo = ActionStore.connect(verbose=verbose)
+        guide_collection = mongo.collection("guides")
+        store = GuideStore.open(guide_collection, verbose=verbose)
 
     is_linkedin = _is_linkedin_workflow(site, task)
     guide_task = _guide_task_key(site, task)

@@ -360,8 +360,14 @@ class GuideStore:
         if self._mongo is not None:
             guide = self._mongo.find(site, task, fingerprint)
             if guide is not None:
+                if self._verbose:
+                    print("[guides] loaded guide from MongoDB", file=sys.stderr)
                 return guide
-        return self._local.find(site, task, fingerprint)
+        guide = self._local.find(site, task, fingerprint)
+        if guide is not None and self._verbose:
+            print(f"[guides] loaded guide from local cache ({self._local.path})",
+                  file=sys.stderr)
+        return guide
 
     # -- write (write-through) --------------------------------------------
 
