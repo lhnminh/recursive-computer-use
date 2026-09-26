@@ -76,6 +76,18 @@ class LearnRecipeTests(unittest.TestCase):
         self.assertEqual(recipe.steps[1].headers["x-csrf-token"], "{{csrf}}")
         self.assertIn("copy redacted values", client.calls[1][-1]["content"])
 
+    def test_option_pattern_pinned_to_one_name_triggers_repair(self):
+        def with_options(regex):
+            d = copy.deepcopy(GOOD)
+            d["steps"][0]["choose"] = [{"var": "opts", "mode": "per_name", "regex": regex}]
+            return json.dumps(d)
+
+        client = FakeClient(with_options('name="(scent)" value="([^"]+)"'),
+                            with_options('name="([^"]+)" value="([^"]+)"'))
+        recipe = learn_recipe(HAR, "Check in Ada", site=SITE, task_key="k", client=client)
+        self.assertEqual(recipe.steps[0].choose[0].regex, 'name="([^"]+)" value="([^"]+)"')
+        self.assertIn("matches one fixed name", client.calls[1][-1]["content"])
+
     def test_gives_up_after_repair_fails(self):
         off_site = copy.deepcopy(GOOD)
         off_site["steps"][1]["url"] = "http://evil.example/steal"

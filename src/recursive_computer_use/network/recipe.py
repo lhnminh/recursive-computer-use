@@ -18,6 +18,14 @@ stored or replayed:
 - every ``{{var}}`` is defined before use;
 - bounded size.
 
+Choices: a step may ``choose`` a value from its HTML response, e.g. which
+search result to open or which color option to select. ``regex`` finds the
+candidates; the runner's chooser (a small model call that sees the task and
+the text around each candidate) picks one. ``mode: "one"`` needs one capture
+group and yields that value. ``mode: "per_name"`` needs two groups (option
+name, option value) and yields a JSON object with at most one value per name.
+Without a chooser the first candidate wins.
+
 Session vars: ``Recipe.session`` lists values read from cookies the logged-in
 browser already holds before step 1 (e.g. LinkedIn's CSRF header is the
 ``JSESSIONID`` cookie). They are declared as ``{"var", "from": "cookie",
@@ -30,12 +38,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 KIND = "api_recipe"
 STATUSES = ("candidate", "active", "retired")
 METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 EXTRACT_SOURCES = frozenset({"json", "header", "cookie", "regex"})
+CHOOSE_MODES = {"one": 1, "per_name": 2}  # mode -> required capture groups
 BODY_FORMATS = frozenset({"json", "form", "text"})
 FORBIDDEN_HEADERS = frozenset(
     {"cookie", "set-cookie", "authorization", "proxy-authorization", "host", "content-length"}
@@ -84,6 +93,16 @@ def render(template: Any, values: Mapping[str, Any]) -> Any:
     if isinstance(template, list):
         return [render(v, values) for v in template]
     return template
+
+
+def render_url(template: str, values: Mapping[str, Any]) -> str:
+    """Like :func:`render`, but percent-encodes each substituted value.
+
+    A search text or a JSON options object may hold spaces, quotes or
+    braces that would break a URL. ``/`` is kept, so a chosen path stays a
+    path.
+    """
+    return _VAR_RE.sub(lambda m: quote(str(_lookup(values, m.group(1))), safe="/"), template)
 
 
 def resolve_session_vars(recipe: "Recipe", cookies: Mapping[str, str]) -> dict[str, str]:
@@ -153,6 +172,30 @@ class Extract:
 
 
 @dataclass
+class Choose:
+    """Pick a value from candidates in a step's response (see module docstring)."""
+
+    var: str
+    regex: str
+    mode: str = "one"
+    context: int = 240  # characters of page text shown around each candidate
+    max: int = 12  # candidates shown to the chooser
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "Choose":
+        return cls(
+            var=d["var"],
+            regex=d["regex"],
+            mode=d.get("mode", "one"),
+            context=int(d.get("context", 240)),
+            max=int(d.get("max", 12)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"var": self.var, "regex": self.regex, "mode": self.mode, "context": self.context, "max": self.max}
+
+
+@dataclass
 class Step:
     """One HTTP request."""
 
@@ -164,6 +207,7 @@ class Step:
     body_format: str = "json"  # json | form | text
     expect_status: int = 200
     extract: list[Extract] = field(default_factory=list)
+    choose: list[Choose] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> "Step":
@@ -176,6 +220,7 @@ class Step:
             body_format=d.get("body_format", "json"),
             expect_status=int(d.get("expect_status", 200)),
             extract=[Extract.from_dict(e) for e in d.get("extract") or []],
+            choose=[Choose.from_dict(c) for c in d.get("choose") or []],
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -188,6 +233,7 @@ class Step:
             "body_format": self.body_format,
             "expect_status": self.expect_status,
             "extract": [e.to_dict() for e in self.extract],
+            "choose": [c.to_dict() for c in self.choose],
         }
 
 
@@ -319,6 +365,23 @@ class Recipe:
                     except re.error as exc:
                         raise RecipeError(f"{where}: bad regex for {ex.var!r}: {exc}") from exc
                 defined.add(ex.var)
+            for ch in step.choose:
+                if not _NAME_RE.match(ch.var) or ch.var in defined:
+                    raise RecipeError(f"{where}: bad or duplicate choose var {ch.var!r}")
+                if ch.mode not in CHOOSE_MODES:
+                    raise RecipeError(f"{where}: choose mode must be one of {sorted(CHOOSE_MODES)}")
+                try:
+                    groups = re.compile(ch.regex).groups
+                except re.error as exc:
+                    raise RecipeError(f"{where}: bad choose regex for {ch.var!r}: {exc}") from exc
+                if groups != CHOOSE_MODES[ch.mode]:
+                    raise RecipeError(
+                        f"{where}: choose {ch.var!r} in mode {ch.mode!r} needs "
+                        f"{CHOOSE_MODES[ch.mode]} capture group(s), regex has {groups}"
+                    )
+                if not (0 <= ch.context <= 2000 and 1 <= ch.max <= 50):
+                    raise RecipeError(f"{where}: choose {ch.var!r} context/max out of range")
+                defined.add(ch.var)
 
         if self.verify is not None:
             url = self.verify.get("url")

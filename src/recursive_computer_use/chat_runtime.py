@@ -11,6 +11,14 @@ from urllib.parse import urlparse
 DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_TASK_KEY = "web-desktop"
 
+_REVIEW_GUARDRAIL = """
+Safety requirement from the user interface: you may navigate, inspect, and
+prepare the requested work, but do not submit, publish, send, purchase, delete,
+confirm, or perform another irreversible external action. Stop immediately
+before the final irreversible action and tell the user what remains.
+""".strip()
+
+
 @dataclass(frozen=True)
 class ChatOptions:
     """Options passed from the local chat surface into ``agent.run``."""
@@ -18,9 +26,11 @@ class ChatOptions:
     model: str = DEFAULT_MODEL
     task_key: str = DEFAULT_TASK_KEY
     verifier_url: str | None = None
+    mongodb_db: str | None = None
     log_actions: bool = True
     evolve: bool = True
     verbose: bool = False
+    stop_before_irreversible: bool = True
 
 
 def normalize_task_key(value: str) -> str:
@@ -31,7 +41,7 @@ def normalize_task_key(value: str) -> str:
 
 
 def validate_verifier_url(value: str | None) -> str | None:
-    """Validate the optional verifier early, before desktop control starts."""
+    """Validate the optional verifier before desktop control starts."""
 
     if not value or not value.strip():
         return None
@@ -46,11 +56,14 @@ def validate_verifier_url(value: str | None) -> str | None:
     return url
 
 
-def build_agent_prompt(prompt: str) -> str:
-    """Validate and return the user's prompt unchanged."""
+def build_agent_prompt(prompt: str, *, stop_before_irreversible: bool) -> str:
+    """Add the UI's review boundary without changing the user's visible text."""
+
     cleaned = prompt.strip()
     if not cleaned:
         raise ValueError("Enter a task before starting computer control.")
+    if stop_before_irreversible:
+        return f"{cleaned}\n\n{_REVIEW_GUARDRAIL}"
     return cleaned
 
 
@@ -65,47 +78,21 @@ def execute_task(
     if runner is None:
         from .agent import run as runner
 
-    runtime_prompt = build_agent_prompt(prompt)
+    runtime_prompt = build_agent_prompt(
+        prompt,
+        stop_before_irreversible=options.stop_before_irreversible,
+    )
     verifier_url = validate_verifier_url(options.verifier_url)
     return runner(
         runtime_prompt,
         model=options.model.strip() or DEFAULT_MODEL,
         verbose=options.verbose,
-        **_supported_run_options(
-            runner,
-            options=options,
-            verifier_url=verifier_url,
-        ),
+        mongodb_db=options.mongodb_db or None,
+        log_actions=options.log_actions,
+        task_key=normalize_task_key(options.task_key),
+        verifier_url=verifier_url,
+        evolve=options.evolve and options.log_actions,
     )
-
-
-def _supported_run_options(
-    runner: Callable[..., str],
-    *,
-    options: ChatOptions,
-    verifier_url: str | None,
-) -> dict[str, object]:
-    """Pass optional chat settings only when the runtime supports them.
-
-    The web UI can run against older agent versions while the runtime API is
-    being integrated. MongoDB database selection is environment-owned by the
-    persistence layer and is never an ``agent.run`` argument.
-    """
-
-    import inspect
-
-    parameters = inspect.signature(runner).parameters
-    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
-        supported = {"log_actions", "task_key", "verifier_url", "evolve"}
-    else:
-        supported = set(parameters)
-    candidates: dict[str, object] = {
-        "log_actions": options.log_actions,
-        "task_key": normalize_task_key(options.task_key),
-        "verifier_url": verifier_url,
-        "evolve": options.evolve and options.log_actions,
-    }
-    return {key: value for key, value in candidates.items() if key in supported}
 
 
 def safe_error(exc: BaseException) -> str:

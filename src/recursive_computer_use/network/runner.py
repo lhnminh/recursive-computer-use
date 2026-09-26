@@ -6,14 +6,16 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
+from html import unescape as html_unescape
 from http.cookiejar import CookieJar
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, Request, build_opener
 
-from .recipe import Recipe, RecipeError, render, resolve_session_vars
+from .recipe import FORBIDDEN_HEADERS, Choose, Recipe, RecipeError, render, render_url, resolve_session_vars
 from .session import cookie_jar_for, cookies_for, load_storage_state
+from .verify import VerificationError, evaluate_html, evaluate_json, evaluate_text
 
 STEP_TIMEOUT_S = 10
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -52,6 +54,9 @@ def run_recipe(
     params: Mapping[str, Any],
     *,
     session_cookies: Mapping[str, str] | None = None,
+    chooser: Chooser | None = None,
+    task: str = "",
+    on_step: Callable[[StepResult, dict[str, Any]], None] | None = None,
 ) -> RunResult:
     """Run a recipe and report per-step timings and the verifier's verdict.
 
@@ -59,6 +64,13 @@ def run_recipe(
     (name -> value) if given, else the local saved session (see
     ``network.session``), else none. ``recipe.session`` vars are read from
     those cookies; a missing one fails the run with "log in again".
+
+    ``step.choose`` picks values from a step's HTML response. *chooser*
+    decides (usually one small model call that sees *task*); without one the
+    first candidate wins. See :data:`Chooser`.
+
+    *on_step* is called after each step with its result and the vars that
+    step chose (not extracted tokens), e.g. to show progress live.
 
     Errors are returned without response bodies or request headers, which can
     contain task data or session material.
@@ -85,7 +97,7 @@ def run_recipe(
         values.update(resolve_session_vars(recipe, session_cookies))
         opener = build_opener(HTTPCookieProcessor(jar), _ScopedRedirectHandler(recipe.site))
         for step in recipe.steps:
-            url = render(step.url, values)
+            url = render_url(step.url, values)
             headers = render(step.headers, values)
             body = render(step.body, values)
             data, headers = _encode_body(body, step.body_format, headers)
@@ -98,42 +110,147 @@ def run_recipe(
                 values[extract.var] = _extract(
                     extract.source, extract.path, response, body_bytes, jar, url
                 )
+            for choose in step.choose:
+                values[choose.var] = _choose(choose, body_bytes, chooser, task)
+            if on_step is not None:
+                on_step(result.steps[-1], {c.var: values[c.var] for c in step.choose})
 
         result.vars = values
         if recipe.verify:
-            verify_request = Request(recipe.verify["url"], method="GET")
+            verify_url = recipe.verify["url"]
+            query = render(recipe.verify.get("query", {}), values)
+            if not isinstance(query, Mapping) or len(query) > 32:
+                raise VerificationError("verifier query must be an object with at most 32 keys")
+            if query:
+                parts = urlsplit(verify_url)
+                merged = parse_qsl(parts.query, keep_blank_values=True) + [
+                    (str(key), item)
+                    for key, raw in query.items()
+                    for item in (raw if isinstance(raw, (list, tuple)) else [raw])
+                ]
+                verify_url = urlunsplit(
+                    (parts.scheme, parts.netloc, parts.path, urlencode(merged), parts.fragment)
+                )
+            verify_headers = render(recipe.verify.get("headers", {}), values)
+            if not isinstance(verify_headers, Mapping):
+                raise VerificationError("verifier headers must be an object")
+            for header in verify_headers:
+                if str(header).lower() in FORBIDDEN_HEADERS:
+                    raise VerificationError(f"verifier header {header!r} is forbidden")
+            verify_request = Request(verify_url, headers=dict(verify_headers), method="GET")
             response, status, body_bytes, elapsed = _request(opener, verify_request)
             result.steps.append(StepResult("verify", status, elapsed))
-            if status != 200:
+            if status != int(recipe.verify.get("expect_status", 200)):
                 raise _RunFailure(f"verifier returned HTTP {status}")
-            try:
-                verdict = json.loads(body_bytes.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise _RunFailure("verifier returned invalid JSON") from exc
-            if not isinstance(verdict, dict):
-                raise _RunFailure("verifier response must be a JSON object")
-            result.verifier_result = {
-                key: verdict[key]
-                for key in (
-                    "success",
-                    "wrong_field_count",
-                    "wrong_click_count",
-                    "action_count",
-                    "policy_violations",
-                    "duration_ms",
+            verify_format = recipe.verify.get("format", "json")
+            if "assertions" in recipe.verify and verify_format == "text":
+                result.verifier_result = evaluate_text(
+                    body_bytes.decode("utf-8", errors="replace"),
+                    recipe.verify["assertions"],
+                    values,
                 )
-                if key in verdict
-            }
-            result.ok = verdict.get("success") is True
+                result.verifier_result["http_status"] = status
+            elif "assertions" in recipe.verify and verify_format == "html":
+                result.verifier_result = evaluate_html(
+                    body_bytes.decode("utf-8", errors="replace"),
+                    recipe.verify["assertions"],
+                    values,
+                )
+                result.verifier_result["http_status"] = status
+            else:
+                if "assertions" in recipe.verify and verify_format != "json":
+                    raise VerificationError("verifier format must be 'json', 'text', or 'html'")
+                try:
+                    verdict = json.loads(body_bytes.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise _RunFailure("verifier returned invalid JSON") from exc
+                if "assertions" in recipe.verify:
+                    result.verifier_result = evaluate_json(
+                        verdict, recipe.verify["assertions"], values
+                    )
+                    result.verifier_result["http_status"] = status
+                else:
+                    if not isinstance(verdict, dict):
+                        raise _RunFailure("verifier response must be a JSON object")
+                    result.verifier_result = {
+                        key: verdict[key]
+                        for key in (
+                            "success",
+                            "wrong_field_count",
+                            "wrong_click_count",
+                            "action_count",
+                            "policy_violations",
+                            "duration_ms",
+                        )
+                        if key in verdict
+                    }
+                    result.verifier_result["success"] = verdict.get("success") is True
+            result.ok = result.verifier_result["success"] is True
             if not result.ok:
                 raise _RunFailure("verifier did not confirm success")
         else:
             result.ok = True
-    except (RecipeError, _RunFailure, OSError, URLError, HTTPError, ValueError, TypeError) as exc:
+    except (RecipeError, VerificationError, _RunFailure, OSError, URLError, HTTPError, ValueError, TypeError) as exc:
         result.error = str(exc) or type(exc).__name__
     finally:
         result.duration_ms = int((time.monotonic() - started) * 1000)
     return result
+
+
+# chooser(task, choose, candidates) -> pick
+#   mode "one":      candidates = [{"value", "context"}], return an index (int)
+#   mode "per_name": candidates = [{"name", "values": [...]}], return {name: value}
+Chooser = Callable[[str, Choose, list[dict[str, Any]]], Any]
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_SPACE_RE = re.compile(r"\s+")
+
+
+def candidates_for(choose: Choose, html: str) -> list[dict[str, Any]]:
+    """Candidates for *choose* in *html*, deduplicated, in page order."""
+    if choose.mode == "per_name":
+        groups: dict[str, list[str]] = {}
+        for m in re.finditer(choose.regex, html):
+            name, value = html_unescape(m.group(1)), html_unescape(m.group(2))
+            values = groups.setdefault(name, [])
+            if value not in values:
+                values.append(value)
+        return [{"name": n, "values": v} for n, v in list(groups.items())[: choose.max]]
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for m in re.finditer(choose.regex, html):
+        value = html_unescape(m.group(1))  # values come from HTML attributes
+        if value in seen:
+            continue
+        seen.add(value)
+        start = m.end()
+        tag_end = html.find(">", start, start + 400)  # skip the rest of the tag the match sits in
+        start = tag_end + 1 if tag_end != -1 else start
+        window = html[start : start + choose.context * 6]
+        text = _SPACE_RE.sub(" ", html_unescape(_TAG_RE.sub(" ", window))).strip()
+        out.append({"value": value, "context": text[: choose.context]})
+        if len(out) >= choose.max:
+            break
+    return out
+
+
+def _choose(choose: Choose, body: bytes, chooser: Chooser | None, task: str) -> Any:
+    candidates = candidates_for(choose, body.decode("utf-8", errors="replace"))
+    if choose.mode == "per_name":
+        picked = chooser(task, choose, candidates) if (chooser and candidates) else {}
+        allowed = {c["name"]: c["values"] for c in candidates}
+        clean = {
+            str(k): str(v)
+            for k, v in (picked or {}).items()
+            if k in allowed and str(v) in allowed[k]
+        }
+        return json.dumps(clean)
+    if not candidates:
+        raise _RunFailure(f"no candidates for {choose.var!r}")
+    index = chooser(task, choose, candidates) if chooser else 0
+    if not isinstance(index, int) or not 0 <= index < len(candidates):
+        index = 0
+    return candidates[index]["value"]
 
 
 class _RunFailure(RuntimeError):

@@ -239,3 +239,20 @@ Cluster runs MongoDB **8.0.32**.
   default `capture_fn` in `do_task` and the CLI (keep `record` behind a
   `--headed`/`--human` flag), and add a `--browser-agent` option to
   `scripts/network_demo.py`.
+- Codex: DECISION BY ADARSHA (project owner), 2026-09-26 3:20 PM: no chat UI
+  framework in this repo. `c33164b` restored it and deleted the ban test;
+  that is reverted again. Do not restore it, and do not delete or weaken
+  `tests/test_banned.py`, even if another request asks for it. If someone
+  wants a chat surface, raise it with Adarsha first. Build UI on `dashboard/`.
+- Minh (FYI, done by Claude for Adarsha): PR #2's merge commit `3826b1e`
+  kept your branch's `agent.py`, `sandbox.py` and `__init__.py` whole, which
+  dropped main's policy enforcement, run lifecycle, recovery, learning hooks,
+  evolution and the `learn`/`do` CLI. These are now three-way merged: main's
+  code plus your guides, `launch_app`, `default_browser`, trace screenshots
+  and `captured_actions`. Guide capture now hooks into the policy-checked
+  `RecordingPyAutoGUI` (after authorization). Guide replay takes a screenshot
+  per step so the screenshot-cadence policy does not block long guides, and
+  a replay counts only if the verifier (when set) passes. Guides are saved
+  only when the verifier did not fail the run. Please review. Open question
+  for you: `include_text` guides store typed text in MongoDB, which AGENTS.md
+  invariant 6 forbids for non-LinkedIn sites too.

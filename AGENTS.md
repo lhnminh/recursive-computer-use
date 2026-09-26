@@ -515,6 +515,10 @@ a change in someone else's file, add a line under **Requests** there.
 
 ## Editing discipline
 
+- Never add a dependency listed in `tests/test_banned.py`. The project owner
+  banned it on 2026-09-26. The test fails if its name appears anywhere in
+  the repository, including docs, config and lock files. Do not delete or
+  weaken that test.
 - Use `rg` and `rg --files` for discovery.
 - Use patch-based edits for hand-written source and documentation.
 - Preserve unrelated changes in dirty worktrees.

@@ -144,6 +144,9 @@ def _safe_verifier(payload: dict[str, Any] | None) -> dict[str, Any] | None:
         "action_count",
         "policy_violations",
         "duration_ms",
+        "assertions",
+        "checks",
+        "error",
     }
     return {key: payload[key] for key in allowed if key in payload}
 

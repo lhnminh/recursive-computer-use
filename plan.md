@@ -115,7 +115,7 @@ disk for simplicity first.
 
 ### 5. GUI (future)
 
-- Read-only first: a small web UI (FastAPI + a static frontend, or Streamlit)
+- Read-only first: a small web UI (FastAPI + a static frontend)
   that lists `runs`, shows the action timeline for a run, and renders each
   step's screenshot with the click coordinates overlaid.
 - Later: trigger replay and start new runs from the GUI.
@@ -143,7 +143,7 @@ disk for simplicity first.
   actions (clicks, types, scrolls)? Curated set first.
 - Recursion granularity: reuse whole action sequences, or just surface them as
   hints to the model? Start with hints.
-- GUI stack: FastAPI + static vs Streamlit? Decide at M6.
+- GUI stack: FastAPI + static frontend.
 
 ## Non-goals (for now)
 

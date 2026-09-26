@@ -9,18 +9,21 @@
 """
 
 from .recipe import (
+    Choose,
     Extract,
     Param,
     Recipe,
     RecipeError,
     Step,
     render,
+    render_url,
     resolve_session_vars,
     template_vars,
 )
 from .runner import RunResult, StepResult, run_recipe
 
 __all__ = [
+    "Choose",
     "Extract",
     "Param",
     "Recipe",
@@ -29,6 +32,7 @@ __all__ = [
     "Step",
     "StepResult",
     "render",
+    "render_url",
     "resolve_session_vars",
     "run_recipe",
     "template_vars",

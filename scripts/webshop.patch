@@ -1,0 +1,110 @@
+diff --git a/web_agent_site/app.py b/web_agent_site/app.py
+index a1a5e6c..79fc665 100644
+--- a/web_agent_site/app.py
++++ b/web_agent_site/app.py
+@@ -277,4 +277,4 @@ if __name__ == "__main__":
+         user_log_dir.mkdir(parents=True, exist_ok=True)
+     SHOW_ATTRS_TAB = args.attrs
+ 
+-    app.run(host='0.0.0.0', port=3000)
++    app.run(host='127.0.0.1', port=3000)
+diff --git a/web_agent_site/engine/engine.py b/web_agent_site/engine/engine.py
+index 2e5eee3..38ba336 100644
+--- a/web_agent_site/engine/engine.py
++++ b/web_agent_site/engine/engine.py
+@@ -13,7 +13,10 @@ from tqdm import tqdm
+ from rank_bm25 import BM25Okapi
+ from flask import render_template_string
+ from rich import print
+-from pyserini.search.lucene import LuceneSearcher
++try:
++    from pyserini.search.lucene import LuceneSearcher
++except ImportError:  # no Java/pyserini: use the pure-Python BM25 index below
++    LuceneSearcher = None
+ 
+ from web_agent_site.utils import (
+     BASE_DIR,
+@@ -203,8 +206,66 @@ def init_search_engine(num_products=None):
+         indexes = 'indexes'
+     else:
+         raise NotImplementedError(f'num_products being {num_products} is not supported yet.')
+-    search_engine = LuceneSearcher(os.path.join(BASE_DIR, f'../search_engine/{indexes}'))
+-    return search_engine
++    if LuceneSearcher is not None:
++        return LuceneSearcher(os.path.join(BASE_DIR, f'../search_engine/{indexes}'))
++    return BM25Searcher(num_products)
++
++
++class _Hit:
++    def __init__(self, docid):
++        self.docid = docid
++
++
++class _Doc:
++    def __init__(self, asin):
++        self._raw = json.dumps({'id': asin})
++
++    def raw(self):
++        return self._raw
++
++
++class BM25Searcher:
++    """Drop-in for pyserini's LuceneSearcher (search/doc), built in memory.
++
++    Document text matches search_engine/convert_product_file_format.py:
++    title + description + first bullet point + options, lowercased.
++    """
++
++    def __init__(self, num_products=None):
++        from rank_bm25 import BM25Okapi
++
++        with open(DEFAULT_FILE_PATH) as f:
++            products = json.load(f)
++        if num_products:
++            products = products[:num_products]
++        self.asins, corpus = [], []
++        for p in products:
++            if not p.get('asin'):
++                continue
++            options = p.get('customization_options')
++            options = options if isinstance(options, dict) else {}
++            option_text = ', and '.join(
++                f"{name}: {', '.join(str(o.get('value', o)) if isinstance(o, dict) else str(o) for o in (vals or []))}"
++                for name, vals in options.items()
++            )
++            bullets = p.get('small_description') or ['']
++            text = ' '.join([
++                str(p.get('name') or ''),
++                str(p.get('full_description') or ''),
++                str(bullets[0] if isinstance(bullets, list) and bullets else bullets),
++                option_text,
++            ]).lower()
++            self.asins.append(p['asin'])
++            corpus.append(re.findall(r'\w+', text))
++        self.bm25 = BM25Okapi(corpus)
++
++    def search(self, query, k=10):
++        scores = self.bm25.get_scores(re.findall(r'\w+', query.lower()))
++        top = sorted(range(len(scores)), key=lambda i: -scores[i])[:k]
++        return [_Hit(self.asins[i]) for i in top]
++
++    def doc(self, docid):
++        return _Doc(docid)
+ 
+ 
+ def clean_product_keys(products):
+diff --git a/web_agent_site/utils.py b/web_agent_site/utils.py
+index f1d7447..982efbd 100644
+--- a/web_agent_site/utils.py
++++ b/web_agent_site/utils.py
+@@ -7,8 +7,8 @@ from os.path import dirname, abspath, join
+ BASE_DIR = dirname(abspath(__file__))
+ DEBUG_PROD_SIZE = None  # set to `None` to disable
+ 
+-DEFAULT_ATTR_PATH = join(BASE_DIR, '../data/items_ins_v2_1000.json')
+-DEFAULT_FILE_PATH = join(BASE_DIR, '../data/items_shuffle_1000.json')
++DEFAULT_ATTR_PATH = join(BASE_DIR, '../data/items_ins_v2_10000.json')
++DEFAULT_FILE_PATH = join(BASE_DIR, '../data/items_shuffle_10000.json')
+ DEFAULT_REVIEW_PATH = join(BASE_DIR, '../data/reviews.json')
+ 
+ FEAT_CONV = join(BASE_DIR, '../data/feat_conv.pt')

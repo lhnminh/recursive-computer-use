@@ -146,7 +146,10 @@ class AgentLifecycleTests(unittest.TestCase):
             patch.object(agent, "OpenAI", return_value=client),
             patch.object(agent, "Sandbox", FakeSandbox),
         ):
-            return agent.run("task", model="model", action_store=store)
+            return agent.run(
+                "task", model="model", action_store=store,
+                use_guides=False, replay_guides=False,
+            )
 
     def test_successful_run_is_finished(self):
         store = FakeRunStore()
