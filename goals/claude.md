@@ -62,21 +62,25 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
       Codex's runner succeeds.
 - [x] Live model test on the fixture HAR (`gpt-5.6-terra`): learned the 2-step session → checkin chain with csrf extraction in 11.7 s; `fill_params` 3.9 s.
 
-## N5. Recipe store (~60 min)
+## N5. Recipe store — done
 
-- [ ] Write `site_map` `api_call` edges when a recipe is saved.
+- [x] Write `site_map` `api_call` edges when a recipe is saved.
 
-- [ ] `recipes.py`: `RecipeStore(db)` per the contract in `GOALS.md`.
-- [ ] `find_for_task`: `$rankFusion` over Voyage on `description`, keyword
+- [x] `recipes.py`: `RecipeStore(db)` per the contract in `GOALS.md`.
+- [x] `find_for_task`: `$rankFusion` over Voyage on `description`, keyword
       on `description`, and positive `lift`, filtered to
       `kind: "api_recipe"`, live status, and `scope.site` when given.
-- [ ] `record_result`: writes an episode (`learning.py`), `$inc` uses/wins,
+- [x] `record_result`: writes an episode (`learning.py`), `$inc` uses/wins,
       lift. First verified success promotes `candidate` → `active`. Two
       failures in a row on an `active` recipe → `retired`.
-- [ ] `supersede`: new version with `parent_id`, old one retired.
-- [ ] `watch(on_recipe)`: change stream on `skills` for new `active`
+- [x] `supersede`: new version with `parent_id`, old one retired.
+- [x] `watch(on_recipe)`: change stream on `skills` for new `active`
       recipes, resume token in `agent_state`.
-- [ ] Atlas test in `tests/test_recipes_atlas.py`.
+- [x] Atlas test in `tests/test_recipes_atlas.py`.
+- [x] Relevance gate: lift/"proven" only re-order recipes within 0.05 of the
+      best Voyage score, so a proven check-in recipe never answers a pizza
+      order (found by the Atlas test).
+- [x] Episodes get `mode` (`computer_use` | `api_recipe`) and explicit `site`.
 
 ## C4. Strict validation (last, ~15 min, before 9 PM freeze)
 
@@ -91,3 +95,4 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 - N2: `schema.py` — `api_recipe` skills, `recordings` (TTL 14 d), `api_call` edges; applied to Atlas.
 - N3: `network/har.py` — filter + redact HAR, stable `<token:N>`/`<email:N>`/`<secret:N>` placeholders shared with the task text; 8 tests.
 - N4: `network/learner.py` — `learn_recipe` (1 call + 1 repair), `fill_params`; 7 tests + live model check.
+- N5: `recipes.py` — RecipeStore (save/supersede/record_result/find_for_task/watch/call_chain); 5 Atlas tests.

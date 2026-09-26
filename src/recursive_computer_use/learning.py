@@ -296,14 +296,18 @@ class LearningStore:
         tokens_in: int = 0,
         tokens_out: int = 0,
         recovery: Mapping[str, Any] | None = None,
+        site: str | None = None,
+        mode: str = "computer_use",
     ) -> None:
         """Write one episode, update its site and skills, recompute lift.
 
         *recovery* holds the run's failure-signal counts from
         :class:`~recursive_computer_use.recovery.RecoveryMonitor`.
+        *site* defaults to the first URL host in *prompt*. *mode* is
+        ``computer_use`` or ``api_recipe``.
         """
         now = _utcnow()
-        site = site_from_prompt(prompt, task_key)
+        site = site or site_from_prompt(prompt, task_key)
         try:
             self.episodes.insert_one(
                 {
@@ -313,6 +317,7 @@ class LearningStore:
                     "site": site,
                     "model": model,
                     "outcome": outcome,
+                    "mode": mode,
                     "held_out": False,
                     "policy_version": policy_version,
                     "metrics": dict(metrics) if metrics else None,

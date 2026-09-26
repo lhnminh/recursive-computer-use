@@ -266,6 +266,7 @@ COLLECTIONS: dict[str, dict[str, Any]] = {
                 "site": _STR,
                 "model": _OPT_STR,
                 "outcome": {"enum": EPISODE_OUTCOMES},
+                "mode": {"enum": ["computer_use", "api_recipe"]},
                 "held_out": {"bsonType": "bool"},
                 "policy_version": {"bsonType": ["int", "long", "null"]},
                 "metrics": {"bsonType": ["object", "null"]},
@@ -617,16 +618,20 @@ def ensure_search_indexes(db: Database) -> None:
             continue
         for name, spec in indexes.items():
             current = live.get(name)
-            if current is None:
-                coll.create_search_index(
-                    SearchIndexModel(name=name, type=spec["type"], definition=spec["definition"])
-                )
-                print(f"[schema] creating search index {coll_name}.{name}")
-            elif not _same_fields(spec["definition"], current.get("latestDefinition")):
-                coll.update_search_index(name, spec["definition"])
-                print(f"[schema] updating search index {coll_name}.{name}")
-            else:
-                print(f"[schema] search index {coll_name}.{name}: {current.get('status')}")
+            try:
+                if current is None:
+                    coll.create_search_index(
+                        SearchIndexModel(name=name, type=spec["type"], definition=spec["definition"])
+                    )
+                    print(f"[schema] creating search index {coll_name}.{name}")
+                elif not _same_fields(spec["definition"], current.get("latestDefinition")):
+                    coll.update_search_index(name, spec["definition"])
+                    print(f"[schema] updating search index {coll_name}.{name}")
+                else:
+                    print(f"[schema] search index {coll_name}.{name}: {current.get('status')}")
+            except OperationFailure as exc:
+                # The search service can be briefly unreachable; rerun schema.py later.
+                print(f"[schema] search index {coll_name}.{name} not applied: {exc}", file=sys.stderr)
 
 
 def ensure_schema(db: Database) -> None:

@@ -121,7 +121,9 @@ network.learner.fill_params(recipe, task) -> dict[str, str]
 recipes.RecipeStore(db)
     .save_candidate(recipe, *, recording_id=None) -> ObjectId
     .find_for_task(task, *, site=None, limit=3) -> list[Recipe]   # $rankFusion
-    .record_result(recipe_id, *, ok, run_ms, steps) -> None       # uses/wins/lift, promote/retire
+    .record_result(recipe_id, *, ok, run_ms, steps=(), task=None, llm_calls=0) -> str  # new status
+    .get(recipe_id) -> Recipe | None
+    .call_chain(site, "GET /api/session") -> list[{from, to, via}]  # $graphLookup, for the dashboard
     .supersede(old_id, new_recipe) -> ObjectId                    # version + 1, parent_id
     .watch(on_recipe) -> stop_fn                                  # change stream, resume token
 ```
