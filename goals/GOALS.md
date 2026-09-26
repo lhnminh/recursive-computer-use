@@ -175,6 +175,12 @@ Voyage retrieval helpers Codex can call (read-only):
   future multi-task runner. Do not pass held-out cases into promotion. The
   existing two-run runtime should keep its current behavior until task split
   and replay orchestration are explicit.
+- Minh: wire the accepted-policy feed into the running agent when ready:
+  `feed = PolicyFeed(db, agent_id)`
+  `feed.watch(task_key, on_policy)`
+  `feed.stop()`
+- Minh: call `record_metrics` after each verified run:
+  `record_metrics(db, task_key, policy_version, metrics)`
 - Minh (FYI, done by Claude 2026-09-26): `agent.py` now uses
   `recovery.RecoveryMonitor`. Stuck runs get hints, then abort. A failed
   verification sends the model back up to `retry_limit` times. Every ending

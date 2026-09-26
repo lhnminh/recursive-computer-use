@@ -33,7 +33,7 @@ retired skills make a good dashboard panel.
 
 ## X2. Live policy feed with change streams (~45 min)
 
-- [ ] New `evolution/feed.py`: `PolicyFeed(db, agent_id)`.
+- [x] New `evolution/feed.py`: `PolicyFeed(db, agent_id)`.
       - `watch(task_key, on_policy)` opens a change stream on `policies`
         filtered to `status: "accepted"` for that `task_key`.
       - After each event, save the resume token to `agent_state`
@@ -41,11 +41,11 @@ retired skills make a good dashboard panel.
       - On start, resume from the saved token, so a restarted agent catches
         up on policies accepted while it was down.
       - Run in a background thread. Stop cleanly.
-- [ ] If change streams are not available, return a no-op feed and log one
+- [x] If change streams are not available, return a no-op feed and log one
       warning.
-- [ ] Test: start feed, accept a policy, receive it. Stop feed, accept
+- [x] Test: start feed, accept a policy, receive it. Stop feed, accept
       another, restart feed, receive the missed one.
-- [ ] Do not wire this into `runtime.py` or `agent.py`. Add a request for
+- [x] Do not wire this into `runtime.py` or `agent.py`. Add a request for
       Minh under **Requests** in `GOALS.md` with a 3-line usage example.
 
 ## X3. Metrics history and learning curve (~45 min)
@@ -90,3 +90,4 @@ retired skills make a good dashboard panel.
 ## Done log
 
 <!-- One line per finished task: task id, commit hash, one-line result. -->
+- X1, `7a1e860`, atomic verdict/status update, duplicate save result, Atlas rollback check.
