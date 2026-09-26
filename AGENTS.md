@@ -36,6 +36,8 @@ Read these files in order when starting substantial work:
 4. `src/recursive_computer_use/sandbox.py` for the execution boundary.
 5. `src/recursive_computer_use/store.py` for persistence behavior.
 6. `src/recursive_computer_use/evolution/` for policy and memory contracts.
+7. `src/recursive_computer_use/schema.py` for every MongoDB collection shape.
+8. `goals/GOALS.md` for current tasks, file ownership, and Atlas facts.
 
 Also inspect `git status` before editing. Preserve unrelated user or teammate
 changes. Never discard a dirty working tree to simplify your task.
@@ -75,17 +77,30 @@ changes. Never discard a dirty working tree to simplify your task.
   - Owns `runs` and `actions`.
   - Logging must remain non-fatal.
   - Typed content, secrets, and screenshot bytes must not enter telemetry.
+- `src/recursive_computer_use/schema.py`
+  - Single source of truth for every collection: `$jsonSchema` validators,
+    indexes, the `run_metrics` time series, and Atlas Search / Vector Search
+    indexes.
+  - Idempotent. Run `uv run python -m recursive_computer_use.schema` after
+    any change; existing documents are kept.
 - `scripts/setup_atlas.py`
-  - Creates collection indexes and the Atlas Vector Search index.
+  - Thin entry point that calls `schema.main()`.
+- `src/recursive_computer_use/learning.py`
+  - Owns `episodes`, `sites`, and `skills`.
+  - Called from two hook points in `agent.py`: `sync_policy_skills` before
+    the loop and `record_episode` in `finally`.
+  - Every method is non-fatal, like `store.py`.
 
 ### Evolution
 
 - `evolution/models.py`
   - Source of truth for validated documents and bounds.
 - `evolution/embedding.py`
-  - Generates deterministic local vectors.
+  - Legacy deterministic 64-dim hash vectors. The runtime no longer uses
+    them; kept only for old documents and tests.
 - `evolution/memory.py`
-  - Uses Atlas Vector Search and recent-memory fallback.
+  - Uses Atlas Vector Search with Voyage Automated Embedding
+    (`query_text`), then the legacy vector, then recent-memory fallback.
 - `evolution/policy.py`
   - Limits mutation surface and persists policy versions.
 - `evolution/evaluator.py`
@@ -180,8 +195,12 @@ Allowed durable data includes:
 - prompt digests;
 - action type, coordinates, and sanitized metadata;
 - verifier metrics;
-- locally generated embeddings;
+- Atlas-generated Voyage embeddings of redacted text fields;
 - policy versions and evaluation reasons.
+
+Fields indexed with `autoEmbed` are sent by Atlas to Voyage AI for embedding:
+`experiences.lesson`, `skills.description`, `episodes.task`, and
+`page_templates.summary`. Only put redacted, bounded text in these fields.
 
 When adding a field, decide whether it is safe for Atlas before writing the
 code. Default to local-only or omit it if uncertain.
@@ -261,18 +280,65 @@ and dashboard:
 Do not introduce aliases such as `wrong_field_count` inside persistence models.
 The verifier adapter is responsible for translating endpoint fields.
 
-### Vector index
+### Episode outcomes
 
-- Collection: `experiences`
-- Index name: `experience_embedding`
-- Path: `embedding`
-- Dimensions: 64
-- Similarity: cosine
-- Filter field: `task_key`
+Use only:
 
-Changing vector dimensions requires coordinated changes to
-`embedding.py`, `memory.py`, `setup_atlas.py`, documentation, and any existing
-Atlas index.
+- `success`, `failure`: set only from verifier metrics.
+- `unverified`: the model finished but no verifier ran. Never count as
+  success.
+- `timeout`, `error`, `interrupted`: the run did not finish.
+
+Only `success` and `failure` count toward skill `uses`, `wins`, and `lift`.
+
+### Skill statuses
+
+Use only `candidate`, `active`, or `retired`. A rule in an accepted policy
+becomes `active`. A skill with `lift < -0.2` after 3 verified uses becomes
+`retired`.
+
+### Search indexes
+
+All embeddings use Atlas Automated Embedding with Voyage `voyage-4`. The
+harness never computes vectors itself. Definitions live in
+`schema.SEARCH_INDEXES`:
+
+| Collection | Index | Type | Embedded path | Filter fields |
+|---|---|---|---|---|
+| `experiences` | `experience_auto` | vectorSearch (autoEmbed) | `lesson` | `task_key`, `outcome` |
+| `experiences` | `experience_text` | search | `summary`, `lesson` | |
+| `skills` | `skill_auto` | vectorSearch (autoEmbed) | `description` | `status`, `scope.task_key` |
+| `episodes` | `episode_auto` | vectorSearch (autoEmbed) | `task` | `site`, `outcome` |
+| `page_templates` | `template_auto` | vectorSearch (autoEmbed) | `summary` | `platform`, `kind` |
+
+Query an autoEmbed index with text, not a vector:
+
+```python
+{"$vectorSearch": {"index": "experience_auto", "path": "lesson",
+                   "query": {"text": "..."}, "model": "voyage-4",
+                   "numCandidates": 50, "limit": 5,
+                   "filter": {"task_key": "..."}}}
+```
+
+Search indexes build asynchronously (~2 minutes). Poll
+`list_search_indexes()` until `status == "READY"` before querying new ones.
+
+The old `experience_embedding` (64-dim) index is no longer created.
+
+### Atlas cluster facts
+
+The cluster runs MongoDB 8.0. These were tested on it:
+
+- Works: Automated Embedding, Vector Search filters, `$rankFusion`, change
+  streams with resume tokens, `$jsonSchema`, transactions, time series, TTL.
+- Does not work: `$scoreFusion` (needs 8.2+). Use `$rankFusion` with weights.
+
+### Schema validation
+
+Validators run in `warn` mode (`schema.VALIDATION_ACTION`). A mismatched
+write succeeds but logs a warning. When you add or rename a persisted field,
+update its validator in `schema.py` in the same commit. Validation will be
+switched to `error` before the demo, and then a missed update rejects writes.
 
 ## Action recording rules
 
@@ -308,8 +374,9 @@ When modifying the evolution engine:
 - Keep `evaluate_candidate` pure and deterministic.
 - Keep persistence adapters small and replaceable with test doubles.
 - Preserve recent-memory fallback when Atlas Vector Search fails.
-- Keep embedding generation local unless the user explicitly approves a remote
-  embedding provider and its data transmission.
+- Embeddings use Atlas Automated Embedding (Voyage). The project owner
+  approved this provider on 2026-09-26. Do not add another remote embedding
+  provider without approval.
 - Bound text, rule counts, vector dimensions, and retrieval limits.
 - Redact experience summaries and lessons before insertion.
 - Reject unknown policy keys rather than silently ignoring them.
@@ -346,6 +413,15 @@ Tests must not:
 
 Use fake `pyautogui`, fake Mongo collections, injected stores, mocked clients,
 and local deterministic data.
+
+Exception: opt-in Atlas integration tests. They skip unless
+`RCU_ATLAS_TESTS=1` is set, use their own scratch database (for example
+`rcu_test_claude`), and drop it at the end. Never write test data to
+`recursive_computer_use`.
+
+```bash
+RCU_ATLAS_TESTS=1 uv run python -m unittest tests.test_learning_atlas -v
+```
 
 Standard validation commands:
 
@@ -389,8 +465,21 @@ Owns:
 - fixture data
 - demo documentation
 
+### MongoDB lane
+
+Owns:
+
+- `schema.py`, `learning.py`, `scripts/setup_atlas.py`
+- `evolution/memory.py` and the Voyage retrieval path
+- the learning-layer hook points in `agent.py` (not the rest of the file)
+- Atlas integration tests
+
 Only one lane should edit a shared file at a time. Assign final integration in
 `agent.py` to the runtime lane after other APIs stabilize.
+
+Current task split and per-file owners for this sprint are in
+`goals/GOALS.md`. Check it before editing a file you do not own. If you need
+a change in someone else's file, add a line under **Requests** there.
 
 ## Editing discipline
 
@@ -416,6 +505,17 @@ Before committing, unless the user says not to validate:
 4. Run `git diff --check`.
 5. Review the diff for raw secrets, screenshots, generated files, and unrelated
    changes.
+
+Several people and agents push to `main` often, and some agents share one
+working tree:
+
+- Stage files by path. Do not use `git add -A` or `git add .`: another
+  agent's unfinished files may be in the same working tree.
+- Run `git pull --rebase --autostash` right before you push. Never force-push
+  `main`.
+- Never commit `.env` or print `MONGODB_URI`.
+- If you changed `schema.py`, run it against Atlas before pushing so the
+  live cluster matches the code.
 
 Use a concise commit message describing observable behavior. Push only to the
 branch requested by the user. If the repository has no configured author
