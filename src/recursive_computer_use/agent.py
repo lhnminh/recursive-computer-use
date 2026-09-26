@@ -9,8 +9,13 @@ It writes Python that uses pyautogui to operate the desktop, calls display()
 to send screenshots back, and calls log() to emit text.
 
 The loop runs until:
-  - The model returns a final message with no tool calls, or
+  - The model returns a final message with no tool calls and the verifier
+    (if any) accepts it or no verifier retries remain,
+  - The recovery monitor aborts a stuck run, or
   - The turn limit is reached.
+
+Every ending except an interrupt runs the verifier, so a stuck or timed-out
+run still produces a verified failure for the evolution engine.
 """
 
 from __future__ import annotations
@@ -18,15 +23,22 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from openai import OpenAI
 
 from .auth import resolve as resolve_auth
+from .evolution.models import EvaluationMetrics, HarnessPolicy
+from .evolution.analytics import record_metrics_nonfatal
+from .evolution.runtime import DEFAULT_LIMITS, DEFAULT_RULES, EvolutionRuntime
 from .guides import GuideStore, Guide, Step, detect_env
+from .learning import LearningStore
+from .recovery import RecoveryMonitor
 from .sandbox import Sandbox
 from .store import ActionStore
+from .verification import fetch_local_metrics
 
 # Maximum round-trips before we give up.
 MAX_TURNS = 30
@@ -169,6 +181,15 @@ def run(
     *,
     model: str = "gpt-5.6-terra",
     verbose: bool = False,
+    mongodb_uri: str | None = None,
+    mongodb_db: str | None = None,
+    log_actions: bool = True,
+    action_store: ActionStore | None = None,
+    task_key: str = "general-desktop",
+    verifier_url: str | None = None,
+    evolve: bool = True,
+    policy_version: int | None = None,
+    observe_only: bool = False,
     site: str | None = None,
     task: str | None = None,
     use_guides: bool = True,
@@ -185,20 +206,35 @@ def run(
     model:
         Model to use. Defaults to ``gpt-5.6-terra`` (available via Codex proxy).
     verbose:
-        Print turn-by-turn activity to stderr.
+        Print turn-by-turn activity to stderr, and keep screenshots in a
+        temporary trace directory.
+    mongodb_uri / mongodb_db:
+        Optional MongoDB connection overrides used for action telemetry.
+    log_actions:
+        Disable all MongoDB telemetry when false.
+    action_store:
+        Optional injected store used by tests and embedding applications.
+    task_key:
+        Stable task family used to scope memories and policies.
+    verifier_url:
+        Optional localhost endpoint returning deterministic task metrics.
+    evolve:
+        Allow verified runs to propose and evaluate policy versions.
+    policy_version:
+        Load one exact stored policy version. Intended for replay evidence runs.
+    observe_only:
+        Record verifier metrics without proposing or promoting a policy.
     site, task:
         Optional ``(site, task)`` key for guide lookup/capture. When omitted,
         they are inferred from *prompt* (see :func:`infer_site_task`).
     use_guides:
-        When True, record or refresh a guide from a successful free-navigation
-        run. Enabled by default.
+        Record or refresh a guide after a run that completes and is not
+        rejected by the verifier.
     replay_guides:
-        When True, attempt to replay a matching saved guide before navigation.
-        Enabled by default.
+        Try a matching saved guide before model navigation.
     guide_store:
-        Optional pre-built :class:`GuideStore`. When omitted and guide
-        capture/replay is enabled, MongoDB is used when configured and the
-        local JSON store remains available as a fallback.
+        Optional pre-built :class:`GuideStore`. When omitted, guides use the
+        run's MongoDB database with a local JSON fallback.
 
     Returns
     -------
@@ -212,188 +248,399 @@ def run(
         _check_proxy(creds.base_url)
 
     client = OpenAI(api_key=creds.api_key, base_url=creds.base_url)
-    trace_dir = Path(tempfile.mkdtemp(prefix="recursive-computer-use-trace-")) \
-        if verbose else None
-    sandbox = Sandbox(trace_dir=trace_dir)
+    owns_store = action_store is None
+    if action_store is None:
+        action_store = (
+            ActionStore.connect(mongodb_uri, mongodb_db, verbose=verbose)
+            if log_actions
+            else ActionStore.disabled(mongodb_db)
+        )
+
+    run_id = action_store.start_run(prompt, model)
+    trace_dir = (
+        Path(tempfile.mkdtemp(prefix="recursive-computer-use-trace-")) if verbose else None
+    )
+    sandbox = (
+        Sandbox(store=action_store, trace_dir=trace_dir)
+        if trace_dir is not None
+        else Sandbox(store=action_store)
+    )
     if verbose and trace_dir is not None:
         print(f"[trace] screenshots: {trace_dir}", file=sys.stderr)
+    evolution_runtime: EvolutionRuntime | None = None
+    policy = HarnessPolicy(
+        task_key=task_key,
+        version=1,
+        parent_version=None,
+        status="accepted",
+        rules=DEFAULT_RULES,
+        limits=DEFAULT_LIMITS,
+        reason="Local fallback policy.",
+    )
+    if (
+        evolve
+        and getattr(action_store, "enabled", False)
+        and action_store.database is not None
+    ):
+        try:
+            evolution_runtime = EvolutionRuntime(action_store.database)
+            policy = evolution_runtime.policy_for_run(
+                task_key, version=policy_version
+            )
+        except Exception as exc:
+            if verbose:
+                print(f"[evolution] policy load failed: {exc}", file=sys.stderr)
+            evolution_runtime = None
+    if hasattr(sandbox, "apply_policy"):
+        sandbox.apply_policy(policy)
 
-    # Resolve the (site, task) key and current machine env.
+    # Learning layer: episodes, sites and skills (see learning.py).
+    started_at = datetime.now(timezone.utc)
+    learning = LearningStore.for_store(action_store) if evolve else None
+    skills_used = (
+        learning.sync_policy_skills(policy, protected_rules=DEFAULT_RULES)
+        if learning
+        else []
+    )
+    verified_metrics: EvaluationMetrics | None = None
+    llm_calls = tokens_in = tokens_out = 0
+    timed_out = False
+    recovery = RecoveryMonitor(int(policy.limits.get("retry_limit", 2)))
+
+    # Guides: resolve the (site, task) key and the current machine env.
     if site is None or task is None:
         inferred_site, inferred_task = infer_site_task(prompt)
         site = site or inferred_site
         task = task or inferred_task
     env = detect_env()
-
     store = guide_store
     if (use_guides or replay_guides) and store is None:
-        # Use the configured MongoDB database for shared guides, with the
-        # GuideStore's local JSON file as a fallback/warm cache.
-        mongo = ActionStore.connect(verbose=verbose)
-        guide_collection = mongo.collection("guides")
-        store = GuideStore.open(guide_collection, verbose=verbose)
-
+        # Shared guides live in the run's database; GuideStore keeps a local
+        # JSON fallback when MongoDB is unavailable.
+        collection = getattr(action_store, "collection", None)
+        store = GuideStore.open(collection("guides") if collection else None, verbose=verbose)
     is_linkedin = _is_linkedin_workflow(site, task)
     guide_task = _guide_task_key(site, task)
+    guides_on = store is not None and bool(site) and bool(guide_task)
 
-    replay_failed = False
-    if replay_guides and store is not None and site and guide_task:
-        guide = store.find_guide(site, guide_task, env.fingerprint)
-        if guide is not None and guide.steps:
+    def check() -> EvaluationMetrics | None:
+        """Read verifier metrics merged with local counts. Never raises."""
+        if not verifier_url:
+            return None
+        try:
+            verified = fetch_local_metrics(verifier_url)
+        except Exception as exc:
             if verbose:
-                print(f"[guide] replaying {len(guide.steps)} saved step(s) for "
-                      f"({site!r}, {guide_task!r})", file=sys.stderr)
-            ok, final_text = _fast_path(
-                sandbox, guide, site=site, prompt=prompt, verbose=verbose
-            )
-            store.bump_guide_stats(site, guide_task, env.fingerprint, ok=ok)
-            if ok:
-                return final_text
-            replay_failed = True
+                print(f"[evolution] verifier failed: {exc}", file=sys.stderr)
+            return None
+        return EvaluationMetrics(
+            success_rate=verified.success_rate,
+            wrong_clicks=verified.wrong_clicks,
+            wrong_field_entries=verified.wrong_field_entries,
+            policy_violations=(
+                verified.policy_violations
+                + int(getattr(action_store, "policy_violation_count", 0))
+            ),
+            action_count=max(
+                verified.action_count,
+                int(getattr(action_store, "action_count", 0)),
+            ),
+            duration_ms=verified.duration_ms,
+        )
+
+    def record(metrics: EvaluationMetrics | None) -> None:
+        """Feed final verified metrics to evolution and telemetry once."""
+        nonlocal verified_metrics
+        if metrics is None:
+            return
+        verified_metrics = metrics
+        try:
+            if observe_only:
+                evolution_result = {
+                    "result": "observed_only",
+                    "policy_version": policy.version,
+                }
+            else:
+                evolution_result = (
+                    evolution_runtime.record_verified_run(policy, metrics)
+                    if evolution_runtime is not None
+                    else None
+                )
+            if hasattr(action_store, "attach_verification"):
+                action_store.attach_verification(
+                    run_id,
+                    task_key=task_key,
+                    policy_version=policy.version,
+                    metrics=metrics.to_document(),
+                    evolution_result=evolution_result,
+                )
+            metrics_database = getattr(action_store, "database", None)
+            if metrics_database is not None:
+                record_metrics_nonfatal(
+                    metrics_database,
+                    run_id=run_id,
+                    task_key=task_key,
+                    policy_version=policy.version,
+                    metrics=metrics,
+                )
             if verbose:
-                print("[guide] replay failed; falling back to screenshot-guided "
-                      "navigation", file=sys.stderr)
-        elif verbose:
-            print(f"[guide] no saved guide for ({site!r}, {guide_task!r}); "
-                  "using screenshot-guided navigation", file=sys.stderr)
+                print(
+                    f"[evolution] verified metrics={metrics.to_document()} "
+                    f"result={evolution_result}",
+                    file=sys.stderr,
+                )
+        except Exception as exc:
+            if verbose:
+                print(f"[evolution] record failed: {exc}", file=sys.stderr)
 
-    # Screenshot-guided navigation is the default and replay fallback.
-    final_text = _free_navigation(client, sandbox, prompt, model=model, verbose=verbose)
-
-    # -- Learn: distill the successful run into a coordinate guide ---------
-    if (use_guides or replay_failed) and store is not None and site and guide_task:
+    def learn_guide(metrics: EvaluationMetrics | None, replay_failed: bool) -> None:
+        """Distill this run into a coordinate guide unless the verifier failed it."""
+        if not (use_guides or replay_failed) or not guides_on:
+            return
+        if metrics is not None and metrics.success_rate < 1.0:
+            return
         try:
             # Do not persist literal text typed into LinkedIn (it may be a
             # private post or message). Coordinates and action kinds are enough
             # for the guide, and the empty text action replays as a no-op.
             steps = _distill_steps(sandbox, env, include_text=not is_linkedin)
-            if steps:
-                guide = Guide(
-                    site=site, task=guide_task, env=env, steps=steps,
-                    title=f"{guide_task} on {site}", source_run_id=None,
-                    model=model,
-                )
-                store.upsert_guide(guide)
-                store.bump_guide_stats(site, guide_task, env.fingerprint, ok=True)
+            if not steps:
                 if verbose:
-                    print(f"[guide] recorded {len(steps)} step(s) for "
-                          f"({site!r}, {guide_task!r}) @ {env.fingerprint}",
+                    print("[guide] no replayable actions captured; nothing stored",
                           file=sys.stderr)
-            elif verbose:
-                print("[guide] no replayable actions captured; nothing stored",
+                return
+            guide = Guide(
+                site=site, task=guide_task, env=env, steps=steps,
+                title=f"{guide_task} on {site}", source_run_id=run_id,
+                model=model,
+            )
+            store.upsert_guide(guide)
+            store.bump_guide_stats(site, guide_task, env.fingerprint, ok=True)
+            if verbose:
+                print(f"[guide] recorded {len(steps)} step(s) for "
+                      f"({site!r}, {guide_task!r}) @ {env.fingerprint}",
                       file=sys.stderr)
-        except Exception as exc:  # noqa: BLE001 — never fail the run on learning
+        except Exception as exc:  # never fail the run on learning
             print(f"[guide] distillation failed (non-fatal): {exc}", file=sys.stderr)
 
-    return final_text
-
-
-def _free_navigation(
-    client: OpenAI,
-    sandbox: Sandbox,
-    prompt: str,
-    *,
-    model: str,
-    verbose: bool,
-) -> str:
-    """The original slow loop: model looks, reasons, acts, repeats."""
+    # Rules come from Atlas. Keep each to one bounded line so a stored rule
+    # cannot smuggle extra instructions into the system prompt.
+    policy_text = "\n".join(
+        f"- {' '.join(str(rule).split())[:300]}" for rule in policy.rules
+    )
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
             "content": (
                 f"{SYSTEM_PROMPT}\n\n"
-                f"The operating system reports {sandbox.default_browser!r} "
+                f"The operating system reports {getattr(sandbox, 'default_browser', 'unknown')!r} "
                 "as the default browser. Use that app when opening websites."
+            ),
+        },
+        {
+            "role": "system",
+            "content": (
+                f"Active local harness policy v{policy.version} for {policy.task_key}. "
+                "These rules are mandatory and enforced by the runtime:\n"
+                f"{policy_text}"
             ),
         },
         {"role": "user", "content": prompt},
     ]
+    status = "failed"
+    final_text: str | None = None
 
-    for turn in range(1, MAX_TURNS + 1):
-        if verbose:
-            print(f"[turn {turn}] calling model …", file=sys.stderr)
+    try:
+        # Fast path: replay a saved guide. It runs through the same sandbox,
+        # so policy limits and telemetry still apply, and only the verifier
+        # decides whether it worked.
+        replay_failed = False
+        if replay_guides and guides_on:
+            guide = store.find_guide(site, guide_task, env.fingerprint)
+            if guide is not None and guide.steps:
+                if verbose:
+                    print(f"[guide] replaying {len(guide.steps)} saved step(s) for "
+                          f"({site!r}, {guide_task!r})", file=sys.stderr)
+                sandbox.set_action_context(run_id, 0)
+                ok, replay_text = _fast_path(
+                    sandbox, guide, site=site, prompt=prompt, verbose=verbose
+                )
+                metrics = check() if ok else None
+                if ok and metrics is not None and metrics.success_rate < 1.0:
+                    ok = False
+                store.bump_guide_stats(site, guide_task, env.fingerprint, ok=ok)
+                if ok:
+                    final_text = replay_text
+                    status = "completed"
+                    record(metrics)
+                    if verbose:
+                        print(f"[done] {final_text}", file=sys.stderr)
+                    return final_text
+                replay_failed = True
+                if verbose:
+                    print("[guide] replay failed; falling back to screenshot-guided "
+                          "navigation", file=sys.stderr)
+            elif verbose:
+                print(f"[guide] no saved guide for ({site!r}, {guide_task!r}); "
+                      "using screenshot-guided navigation", file=sys.stderr)
 
-        response = client.chat.completions.create(
-            model=model,
-            tools=[EXEC_PY_TOOL],
-            messages=messages,
-        )
-
-        choice = response.choices[0]
-        msg = choice.message
-
-        # Append assistant message to history.
-        # exclude_unset=True + exclude_none=True drops fields like `annotations`
-        # that are present in newer SDK versions but rejected by some API endpoints.
-        messages.append(msg.model_dump(exclude_unset=True, exclude_none=True))
-
-        if verbose:
-            progress = msg.content
-            if isinstance(progress, str) and progress.strip():
-                print(f"  model: {progress.strip()}", file=sys.stderr)
-            else:
-                print("  model: (no progress update in assistant message)",
-                      file=sys.stderr)
-
-        # No tool calls → model is done
-        if not msg.tool_calls:
-            final_text = msg.content or ""
+        for turn in range(1, MAX_TURNS + 1):
             if verbose:
-                print(f"[done] {final_text}", file=sys.stderr)
-            return final_text
+                print(f"[turn {turn}] calling model …", file=sys.stderr)
 
-        if turn == MAX_TURNS:
-            raise RuntimeError(
-                f"Reached the {MAX_TURNS}-turn limit without a final answer."
+            response = client.chat.completions.create(
+                model=model,
+                tools=[EXEC_PY_TOOL],
+                messages=messages,
             )
+            llm_calls += 1
+            usage = getattr(response, "usage", None)
+            tokens_in += int(getattr(usage, "prompt_tokens", 0) or 0)
+            tokens_out += int(getattr(usage, "completion_tokens", 0) or 0)
 
-        # Execute each tool call and append results
-        for tool_call in msg.tool_calls:
-            if tool_call.function.name != "exec_py":
-                raise ValueError(
-                    f"Model requested unexpected tool: {tool_call.function.name!r}"
+            choice = response.choices[0]
+            msg = choice.message
+
+            # Append assistant message to history.
+            # exclude_unset=True + exclude_none=True drops fields like `annotations`
+            # that are present in newer SDK versions but rejected by some API endpoints.
+            messages.append(msg.model_dump(exclude_unset=True, exclude_none=True))
+
+            if verbose:
+                progress = msg.content
+                if isinstance(progress, str) and progress.strip():
+                    print(f"  model: {progress.strip()}", file=sys.stderr)
+
+            # No tool calls → model says it is done. Only the verifier decides.
+            if not msg.tool_calls:
+                final_text = msg.content or ""
+                metrics = check()
+                retry = (
+                    recovery.verifier_retry_prompt(metrics)
+                    if metrics is not None and turn < MAX_TURNS
+                    else None
+                )
+                if retry:
+                    if verbose:
+                        print(f"[recovery] {retry}", file=sys.stderr)
+                    messages.append({"role": "user", "content": retry})
+                    continue
+                status = "completed"
+                record(metrics)
+                learn_guide(metrics, replay_failed)
+                if verbose:
+                    print(f"[done] {final_text}", file=sys.stderr)
+                return final_text
+
+            if turn == MAX_TURNS:
+                timed_out = True
+                record(check())
+                raise RuntimeError(
+                    f"Reached the {MAX_TURNS}-turn limit without a final answer."
                 )
 
-            args = json.loads(tool_call.function.arguments)
-            code: str = args["code"]
+            # Execute each tool call and append results
+            sandbox.set_action_context(run_id, turn)
+            for tool_call in msg.tool_calls:
+                if tool_call.function.name != "exec_py":
+                    raise ValueError(
+                        f"Model requested unexpected tool: {tool_call.function.name!r}"
+                    )
 
-            if verbose:
-                print(f"  exec_py ({tool_call.id}):\n{code}", file=sys.stderr)
+                args = json.loads(tool_call.function.arguments)
+                code: str = args["code"]
 
-            result = sandbox.run(code)
+                if verbose:
+                    preview = code.splitlines()[0][:80]
+                    print(f"  exec_py: {preview!r}", file=sys.stderr)
 
-            if verbose:
-                stdout = result.get("stdout", "").strip()
-                if stdout:
-                    print(f"  stdout:\n{stdout}", file=sys.stderr)
-                error = result.get("error")
-                if error:
-                    print(f"  error:\n{error.rstrip()}", file=sys.stderr)
-                n_imgs = len(result.get("images", []))
-                print(f"  observation: {n_imgs} screenshot(s); "
-                      f"{'error' if result.get('error') else 'no execution error'}",
-                      file=sys.stderr)
+                actions_before = _desktop_actions(action_store)
+                result = sandbox.run(code)
+                hint = recovery.observe(
+                    code, result, _desktop_actions(action_store) - actions_before
+                )
 
-            # Build tool result — text only in the `tool` message.
-            # Some API endpoints (e.g. the local Codex proxy) reject image_url
-            # blocks inside tool-role messages, so screenshots are appended as a
-            # follow-up `user` message instead.
-            text_content, image_blocks = _build_tool_content(result)
+                if verbose and result.get("error"):
+                    print(f"  error: {result['error'].splitlines()[-1]}", file=sys.stderr)
+                if verbose:
+                    n_imgs = len(result.get("images", []))
+                    if n_imgs:
+                        print(f"  captured {n_imgs} screenshot(s)", file=sys.stderr)
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": text_content,
-            })
+                # Build tool result — text only in the `tool` message.
+                # Some API endpoints (e.g. the local Codex proxy) reject image_url
+                # blocks inside tool-role messages, so screenshots are appended as a
+                # follow-up `user` message instead.
+                text_content, image_blocks = _build_tool_content(result)
+                if hint:
+                    text_content += f"\n\n{hint}"
+                    if verbose:
+                        print(f"  [recovery] nudge {recovery.nudges}", file=sys.stderr)
 
-            # Inject screenshots as a user message so the model can see them.
-            if image_blocks:
                 messages.append({
-                    "role": "user",
-                    "content": image_blocks,
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": text_content,
                 })
 
+                # Inject screenshots as a user message so the model can see them.
+                if image_blocks:
+                    messages.append({
+                        "role": "user",
+                        "content": image_blocks,
+                    })
+
+            if recovery.should_abort:
+                record(check())
+                raise RuntimeError(
+                    f"Run aborted: still stuck after {recovery.retry_limit} "
+                    "recovery attempt(s)."
+                )
+    except KeyboardInterrupt:
+        status = "interrupted"
+        raise
+    finally:
+        action_store.finish_run(run_id, status, final_text)
+        if learning is not None:
+            learning.record_episode(
+                run_id=run_id,
+                prompt=prompt,
+                task_key=task_key,
+                model=model,
+                outcome=_episode_outcome(status, verified_metrics, timed_out),
+                started_at=started_at,
+                policy_version=policy.version,
+                metrics=verified_metrics.to_document() if verified_metrics else None,
+                skills_used=skills_used,
+                llm_calls=llm_calls,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                recovery=recovery.to_document(),
+            )
+        if owns_store:
+            action_store.close()
+
     raise RuntimeError("Agentic loop exited unexpectedly.")
+
+
+def _desktop_actions(action_store: Any) -> int:
+    """Desktop actions that reached pyautogui (policy violations excluded)."""
+    return int(getattr(action_store, "action_count", 0)) - int(
+        getattr(action_store, "policy_violation_count", 0)
+    )
+
+
+def _episode_outcome(
+    status: str, metrics: EvaluationMetrics | None, timed_out: bool
+) -> str:
+    """Map a run's end state to an episode outcome. Only a verifier says success."""
+    if metrics is not None:
+        return "success" if metrics.success_rate >= 1.0 else "failure"
+    if status == "completed":
+        return "unverified"
+    if status == "interrupted":
+        return "interrupted"
+    return "timeout" if timed_out else "error"
 
 
 def _fast_path(
@@ -474,6 +721,9 @@ def _fast_path(
         else:
             lines.append(_replay_line(step))
         lines.append("time.sleep(0.4)")
+        # The runtime policy requires a fresh screenshot every few actions;
+        # take one per step so long guides are not blocked mid-replay.
+        lines.append("pyautogui.screenshot()")
     result = sandbox.run("\n".join(lines))
     if result.get("error"):
         if verbose:

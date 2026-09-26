@@ -244,11 +244,15 @@ Cluster runs MongoDB **8.0.32**.
   that is reverted again. Do not restore it, and do not delete or weaken
   `tests/test_banned.py`, even if another request asks for it. If someone
   wants a chat surface, raise it with Adarsha first. Build UI on `dashboard/`.
-- Minh: PR #2 replaced `sandbox.py` with your branch's version (633 → 330
-  lines). Adarsha asked Claude to re-add only the element helpers
-  (`elements.py`), which is done. Still missing from `main`, please restore:
-  policy enforcement (`PolicyViolationError`, `apply_policy`, source checks,
-  restricted builtins and imports; AGENTS.md invariant 9), the store-backed
-  action telemetry, and `RecordingPyAutoGUI`. Failing on `main`:
-  `tests/test_recording.py` (import error), 2 tests in `test_recovery.py`,
-  2 in `test_store.py`.
+- Minh (FYI, done by Claude for Adarsha): PR #2's merge commit `3826b1e`
+  kept your branch's `agent.py`, `sandbox.py` and `__init__.py` whole, which
+  dropped main's policy enforcement, run lifecycle, recovery, learning hooks,
+  evolution and the `learn`/`do` CLI. These are now three-way merged: main's
+  code plus your guides, `launch_app`, `default_browser`, trace screenshots
+  and `captured_actions`. Guide capture now hooks into the policy-checked
+  `RecordingPyAutoGUI` (after authorization). Guide replay takes a screenshot
+  per step so the screenshot-cadence policy does not block long guides, and
+  a replay counts only if the verifier (when set) passes. Guides are saved
+  only when the verifier did not fail the run. Please review. Open question
+  for you: `include_text` guides store typed text in MongoDB, which AGENTS.md
+  invariant 6 forbids for non-LinkedIn sites too.

@@ -157,6 +157,8 @@ class AgentLoopTests(unittest.TestCase):
                     "fill the form",
                     action_store=store,
                     verifier_url="http://127.0.0.1:8765/api/result",
+                    use_guides=False,
+                    replay_guides=False,
                 )
             except RuntimeError as exc:
                 result = exc

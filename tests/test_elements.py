@@ -9,7 +9,7 @@ from recursive_computer_use.elements import (
     RawElement,
     make_helpers,
 )
-from recursive_computer_use.sandbox import _RecordingPyAutoGUI
+from recursive_computer_use.sandbox import RecordingPyAutoGUI
 
 
 class FakeBackend:
@@ -48,7 +48,8 @@ FORM = [
 def _helpers(frames):
     fake = FakePyAutoGUI()
     events = []
-    recorder = _RecordingPyAutoGUI(fake, lambda *event: events.append(event))
+    recorder = RecordingPyAutoGUI(fake, lambda *event: events.append(event))
+    recorder.set_context("run-1", 1)
     return make_helpers(recorder, backend=FakeBackend(frames)), fake, events
 
 
@@ -69,7 +70,7 @@ class ElementTests(unittest.TestCase):
             helpers["elements"]()
         helpers["click_element"]("e3")
         self.assertEqual(fake.calls, [("click", (359, 842), {})])
-        self.assertEqual(events[0][0], "click")  # guide capture sees element clicks
+        self.assertEqual(events[0][3], "click")
 
     def test_unknown_or_stale_id_never_falls_back(self):
         helpers, fake, _ = _helpers([FORM, FORM[:1]])
