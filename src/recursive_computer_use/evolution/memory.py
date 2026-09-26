@@ -6,6 +6,9 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .models import Experience, EvolutionValidationError, redact_text, validate_task_key
 
+# $rankFusion weights for lesson retrieval. Tune here only.
+FUSION_WEIGHTS = {"semantic": 2, "keyword": 1, "useful": 1}
+
 
 class ExperienceMemory:
     """Persist and retrieve redacted experiences from a MongoDB collection.
@@ -23,6 +26,8 @@ class ExperienceMemory:
         text_index: str = "experience_auto",
         text_path: str = "lesson",
         text_model: str = "voyage-4",
+        keyword_index: str = "experience_text",
+        policies: Any = None,
     ) -> None:
         self.collection = collection
         self.vector_index = vector_index
@@ -32,6 +37,13 @@ class ExperienceMemory:
         self.text_index = text_index
         self.text_path = text_path
         self.text_model = text_model
+        self.keyword_index = keyword_index
+        # Needed only for the "useful" fusion pipeline. Defaults to the
+        # sibling ``policies`` collection when ``collection`` is a real one.
+        if policies is None:
+            database = getattr(collection, "database", None)
+            policies = database["policies"] if database is not None else None
+        self.policies = policies
 
     def store(self, experience: Experience) -> Any:
         """Insert one already-validated, privacy-filtered experience."""
@@ -59,6 +71,9 @@ class ExperienceMemory:
             raise EvolutionValidationError("limit must be an integer from 1 to 20")
 
         if query_text:
+            fused = self.ranked_lessons(task_key, query_text, limit=limit)
+            if fused:
+                return fused
             try:
                 matches = list(
                     self.collection.aggregate(
@@ -101,6 +116,101 @@ class ExperienceMemory:
                 pass
 
         return self._recent_for_task(task_key, limit)
+
+    def ranked_lessons(
+        self, task_key: str, query_text: str, *, limit: int = 3
+    ) -> list[dict[str, Any]]:
+        """Rank experiences with ``$rankFusion`` over meaning, words and usefulness.
+
+        - ``semantic``: Voyage vector search on ``lesson``.
+        - ``keyword``: Atlas Search on ``summary`` and ``lesson``.
+        - ``useful``: experiences whose policy version produced an accepted
+          child policy, newest first. A lesson that led to a verified
+          improvement outranks one that is only similar.
+
+        Returns ``[]`` when fusion is unavailable; the caller falls back.
+        """
+
+        task_key = validate_task_key(task_key)
+        text = redact_text(query_text, field_name="query_text")
+        n = max(20, limit * 10)
+        semantic = self._search_pipeline(
+            index=self.text_index,
+            path=self.text_path,
+            query={"query": {"text": text}, "model": self.text_model},
+            task_key=task_key,
+            limit=n,
+        )[:1]  # $rankFusion input pipelines may not reshape documents
+        keyword = [
+            {
+                "$search": {
+                    "index": self.keyword_index,
+                    "compound": {
+                        "must": [{"text": {"query": text, "path": ["summary", "lesson"]}}],
+                        "filter": [{"equals": {"path": "task_key", "value": task_key}}],
+                    },
+                }
+            },
+            {"$limit": n},
+        ]
+        pipelines: dict[str, list[dict[str, Any]]] = {
+            "semantic": semantic,
+            "keyword": keyword,
+        }
+        proven = self._versions_with_accepted_child(task_key)
+        if proven:
+            pipelines["useful"] = [
+                {"$match": {"task_key": task_key, "policy_version": {"$in": proven}}},
+                {"$sort": {"created_at": -1}},
+                {"$limit": n},
+            ]
+        weights = {name: FUSION_WEIGHTS[name] for name in pipelines}
+        try:
+            return list(
+                self.collection.aggregate(
+                    [
+                        {
+                            "$rankFusion": {
+                                "input": {"pipelines": pipelines},
+                                "combination": {"weights": weights},
+                            }
+                        },
+                        {"$limit": limit},
+                        {
+                            "$project": {
+                                "_id": 0,
+                                "embedding": 0,
+                                "score": {"$meta": "score"},
+                            }
+                        },
+                    ]
+                )
+            )
+        except Exception:
+            return []
+
+    def _versions_with_accepted_child(self, task_key: str) -> list[int]:
+        """Policy versions whose child candidate was accepted by the evaluator."""
+
+        policies = self.policies
+        if policies is None:
+            return []
+        try:
+            return sorted(
+                {
+                    doc["parent_version"]
+                    for doc in policies.find(
+                        {
+                            "task_key": task_key,
+                            "status": "accepted",
+                            "parent_version": {"$ne": None},
+                        },
+                        {"parent_version": 1},
+                    )
+                }
+            )
+        except Exception:
+            return []
 
     @staticmethod
     def _search_pipeline(

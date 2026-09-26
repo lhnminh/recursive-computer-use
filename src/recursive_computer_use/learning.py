@@ -42,6 +42,8 @@ EMBEDDING_MODEL = "voyage-4"
 RETIRE_MIN_USES = 3
 RETIRE_BELOW_LIFT = -0.2
 VERIFIED_OUTCOMES = ("success", "failure")
+# $rankFusion weights for skill retrieval. Tune here only.
+SKILL_FUSION_WEIGHTS = {"semantic": 2, "keyword": 1, "lift": 1}
 
 _URL_HOST_RE = re.compile(r"https?://([^\s/?#]+)", re.I)
 
@@ -283,6 +285,74 @@ class LearningStore:
         if task_key:
             flt["scope.task_key"] = task_key
         return self._vector_search(self.skills, "skill_auto", "description", text, flt, limit)
+
+    def ranked_skills(
+        self, text: str, *, task_key: str | None = None, limit: int = 5
+    ) -> list[dict[str, Any]]:
+        """Rank live skills with ``$rankFusion``: meaning, words and proven lift.
+
+        - ``semantic``: Voyage vector search on ``description``.
+        - ``keyword``: Atlas Search on ``description``.
+        - ``lift``: active skills with positive lift, highest first.
+
+        Falls back to :meth:`similar_skills` when fusion is unavailable.
+        """
+        n = max(20, limit * 10)
+        live = ["candidate", "active"]
+        vflt: dict[str, Any] = {"status": {"$in": live}}
+        sflt: list[dict[str, Any]] = [{"in": {"path": "status", "value": live}}]
+        # Only positive lift earns a boost; rank fusion ignores magnitudes.
+        mflt: dict[str, Any] = {"status": "active", "lift": {"$gt": 0}}
+        if task_key:
+            vflt["scope.task_key"] = task_key
+            sflt.append({"equals": {"path": "scope.task_key", "value": task_key}})
+            mflt["scope.task_key"] = task_key
+        pipelines = {
+            "semantic": [
+                {
+                    "$vectorSearch": {
+                        "index": "skill_auto",
+                        "path": "description",
+                        "query": {"text": text},
+                        "model": EMBEDDING_MODEL,
+                        "numCandidates": n * 5,
+                        "limit": n,
+                        "filter": vflt,
+                    }
+                }
+            ],
+            "keyword": [
+                {
+                    "$search": {
+                        "index": "skill_text",
+                        "compound": {
+                            "must": [{"text": {"query": text, "path": "description"}}],
+                            "filter": sflt,
+                        },
+                    }
+                },
+                {"$limit": n},
+            ],
+            "lift": [{"$match": mflt}, {"$sort": {"lift": -1}}, {"$limit": n}],
+        }
+        try:
+            return list(
+                self.skills.aggregate(
+                    [
+                        {
+                            "$rankFusion": {
+                                "input": {"pipelines": pipelines},
+                                "combination": {"weights": SKILL_FUSION_WEIGHTS},
+                            }
+                        },
+                        {"$limit": limit},
+                        {"$set": {"score": {"$meta": "score"}}},
+                    ]
+                )
+            )
+        except Exception as exc:
+            _warn("ranked_skills", exc)
+            return self.similar_skills(text, task_key=task_key, limit=limit)
 
     def similar_episodes(
         self, text: str, *, site: str | None = None, limit: int = 5

@@ -45,18 +45,23 @@ Your files: `schema.py`, `learning.py`, `scripts/setup_atlas.py`,
 - [x] `tests/test_learning_atlas.py`: 3 tests on a scratch database, pass.
       Run: `RCU_ATLAS_TESTS=1 uv run python -m unittest tests.test_learning_atlas -v`.
 
-## C3. Hybrid lesson ranking with `$rankFusion` (~45 min)
+## C3. Hybrid ranking with `$rankFusion` — done
 
-- [ ] In `memory.py`, rank lessons with `$rankFusion` over three pipelines:
-      - `semantic`: `$vectorSearch` on `experience_auto`.
-      - `keyword`: `$search` on `experience_text`.
-      - `useful`: experiences whose `policy_version` later became
-        `accepted`, newest first (`$lookup` into `policies`).
-- [ ] Weights `semantic: 2, keyword: 1, useful: 1` in one constant.
-- [ ] Fall back to the C2 path if `$rankFusion` fails.
-- [ ] Rank skills the same way in `LearningStore`: similarity plus `lift`.
-- [ ] Test: a lesson that led to an accepted policy outranks an equally
-      similar lesson that did not.
+- [x] `ExperienceMemory.ranked_lessons` fuses three pipelines:
+      `semantic` (Voyage on `lesson`), `keyword` (`experience_text`), and
+      `useful` (experiences whose policy version produced an accepted child
+      policy). `find_similar(query_text=...)` uses it first, so
+      `runtime._propose_candidate` gets fused lessons automatically.
+- [x] `$rankFusion` input pipelines cannot use `$lookup`, so the accepted
+      parent versions are read from `policies` first, then matched.
+- [x] Weights live in `memory.FUSION_WEIGHTS` (2 / 1 / 1).
+- [x] Falls back to plain Voyage search, then the legacy paths.
+- [x] `LearningStore.ranked_skills`: `semantic` + `keyword` (new
+      `skill_text` index) + `lift`. Only skills with positive lift enter the
+      `lift` pipeline: rank fusion ignores magnitudes, so a -0.1 skill would
+      otherwise get the same kind of boost as a +0.6 skill.
+- [x] Tests 4 and 5 in `test_learning_atlas.py`: the proven lesson and the
+      positive-lift skill rank first over near-identical rivals.
 
 ## C4. Turn on strict validation (last, ~15 min)
 

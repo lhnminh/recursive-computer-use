@@ -440,7 +440,25 @@ SEARCH_INDEXES: dict[str, dict[str, dict[str, Any]]] = {
             },
         },
     },
-    "skills": {"skill_auto": _auto_embed("description", "status", "scope.task_key")},
+    "skills": {
+        "skill_auto": _auto_embed("description", "status", "scope.task_key"),
+        "skill_text": {
+            "type": "search",
+            "definition": {
+                "mappings": {
+                    "dynamic": False,
+                    "fields": {
+                        "description": {"type": "string"},
+                        "status": {"type": "token"},
+                        "scope": {
+                            "type": "document",
+                            "fields": {"task_key": {"type": "token"}},
+                        },
+                    },
+                }
+            },
+        },
+    },
     "episodes": {"episode_auto": _auto_embed("task", "site", "outcome")},
     "page_templates": {"template_auto": _auto_embed("summary", "platform", "kind")},
 }

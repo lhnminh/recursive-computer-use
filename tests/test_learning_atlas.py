@@ -146,7 +146,60 @@ class LearningAtlasTests(unittest.TestCase):
             "click the confirm control to finish", task_key="voyage-test", limit=1
         )
         self.assertIn("Submit", skills[0]["description"])
-        print(f"\n  voyage: lesson score={lessons[0]['score']:.3f}, skill score={skills[0]['score']:.3f}")
+        print(f"\n  voyage: fused lesson score={lessons[0]['score']:.3f}, skill score={skills[0]['score']:.3f}")
+
+    def test_4_rank_fusion_prefers_proven_lessons(self):
+        tk = "fusion-test"
+        now = agent.datetime.now(agent.timezone.utc)
+        # Two near-identical lessons. Only v1's child policy (v2) was accepted.
+        self.db.experiences.insert_many(
+            [
+                {"task_key": tk, "outcome": "failure", "policy_version": 1, "created_at": now,
+                 "summary": "Verified failure; wrong fields=1.",
+                 "lesson": "Verify the focused field label before typing."},
+                {"task_key": tk, "outcome": "failure", "policy_version": 3, "created_at": now,
+                 "summary": "Verified failure; wrong fields=1.",
+                 "lesson": "Check the focused field label before typing."},
+            ]
+        )
+        self.db.policies.insert_many(
+            [
+                {"task_key": tk, "version": v, "parent_version": p, "status": s,
+                 "rules": [], "limits": {}, "reason": "t", "created_at": now}
+                for v, p, s in [(1, None, "accepted"), (2, 1, "accepted"),
+                                (3, 2, "accepted"), (4, 3, "rejected")]
+            ]
+        )
+        memory = EvolutionRuntime(self.db).memory
+        self.assertEqual(memory._versions_with_accepted_child(tk), [1, 2])
+        wait_for_search_indexes(self.db)
+        time.sleep(5)
+
+        ranked = memory.find_similar(tk, query_text="typed into the wrong input field", limit=2)
+        self.assertEqual(ranked[0]["policy_version"], 1, ranked)
+        self.assertGreater(ranked[0]["score"], ranked[1]["score"])
+
+    def test_5_rank_fusion_prefers_skills_with_lift(self):
+        tk = "skill-fusion-test"
+        now = agent.datetime.now(agent.timezone.utc)
+        self.db.skills.insert_many(
+            [
+                {"name": f"{tk}:{i}", "version": 1, "kind": "lesson", "status": "active",
+                 "description": d, "scope": {"task_key": tk}, "uses": 5, "wins": w,
+                 "lift": lift, "created_at": now}
+                for i, (d, w, lift) in enumerate(
+                    [
+                        ("Confirm the Submit button is visible, then press it.", 1, -0.1),
+                        ("Make sure the Submit button is visible, then press it.", 5, 0.6),
+                    ]
+                )
+            ]
+        )
+        wait_for_search_indexes(self.db)
+        time.sleep(5)
+        ranked = self.learning.ranked_skills("press the submit button", task_key=tk, limit=2)
+        self.assertEqual(ranked[0]["lift"], 0.6, ranked)
+        self.assertIn("score", ranked[0])
 
 
 if __name__ == "__main__":
