@@ -17,6 +17,12 @@ stored or replayed:
 - no cookie or authorization headers (the runner's cookie jar owns sessions);
 - every ``{{var}}`` is defined before use;
 - bounded size.
+
+Session vars: ``Recipe.session`` lists values read from cookies the logged-in
+browser already holds before step 1 (e.g. LinkedIn's CSRF header is the
+``JSESSIONID`` cookie). They are declared as ``{"var", "from": "cookie",
+"path": cookie_name}`` and resolved at replay time by
+:func:`resolve_session_vars`. The cookie *value* never enters the recipe.
 """
 
 from __future__ import annotations
@@ -78,6 +84,26 @@ def render(template: Any, values: Mapping[str, Any]) -> Any:
     if isinstance(template, list):
         return [render(v, values) for v in template]
     return template
+
+
+def resolve_session_vars(recipe: "Recipe", cookies: Mapping[str, str]) -> dict[str, str]:
+    """Values for ``recipe.session`` from the browser's cookies (name -> value).
+
+    Surrounding double quotes are stripped: servers often quote a cookie
+    (``"ajax:123"``) but expect the bare value in a header. Raises
+    :class:`RecipeError` if a cookie is missing, e.g. the session expired.
+    """
+    out: dict[str, str] = {}
+    for ex in recipe.session:
+        if ex.path not in cookies:
+            raise RecipeError(f"session cookie {ex.path!r} is missing; log in again")
+        out[ex.var] = unquote_cookie(cookies[ex.path])
+    return out
+
+
+def unquote_cookie(value: str) -> str:
+    value = str(value)
+    return value[1:-1] if len(value) >= 2 and value[0] == value[-1] == '"' else value
 
 
 def _lookup(values: Mapping[str, Any], name: str) -> Any:
@@ -175,6 +201,7 @@ class Recipe:
     steps: list[Step]
     params: list[Param] = field(default_factory=list)
     verify: dict[str, Any] | None = None  # {"url": "..."}
+    session: list[Extract] = field(default_factory=list)  # vars from pre-existing cookies
     status: str = "candidate"
     version: int = 1
     parent_id: Any = None
@@ -195,6 +222,7 @@ class Recipe:
                 steps=[Step.from_dict(s) for s in d.get("steps") or []],
                 params=[Param.from_dict(p) for p in d.get("params") or []],
                 verify=dict(d["verify"]) if d.get("verify") else None,
+                session=[Extract.from_dict(e) for e in d.get("session") or []],
                 status=d.get("status", "candidate"),
                 version=int(d.get("version", 1)),
                 parent_id=d.get("parent_id"),
@@ -217,6 +245,7 @@ class Recipe:
             "params": [p.to_dict() for p in self.params],
             "steps": [s.to_dict() for s in self.steps],
             "verify": dict(self.verify) if self.verify else None,
+            "session": [e.to_dict() for e in self.session],
         }
 
     # -- validation ------------------------------------------------------
@@ -248,6 +277,13 @@ class Recipe:
             if param.name in defined:
                 raise RecipeError(f"duplicate param {param.name!r}")
             defined.add(param.name)
+
+        for ex in self.session:
+            if ex.source != "cookie" or not ex.path:
+                raise RecipeError("session vars must be {'from': 'cookie', 'path': <cookie name>}")
+            if not _NAME_RE.match(ex.var) or ex.var in defined:
+                raise RecipeError(f"bad or duplicate session var {ex.var!r}")
+            defined.add(ex.var)
 
         step_ids: set[str] = set()
         for step in self.steps:

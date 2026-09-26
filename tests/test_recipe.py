@@ -112,6 +112,30 @@ class RecipeTests(unittest.TestCase):
             Recipe.from_dict({"description": "no name"})
 
 
+class SessionVarTests(unittest.TestCase):
+    def session_recipe(self, **session):
+        d = example()
+        d["session"] = [dict({"var": "sess_csrf", "from": "cookie", "path": "JSESSIONID"}, **session)]
+        d["steps"][1]["headers"]["csrf-token"] = "{{sess_csrf}}"
+        return Recipe.from_dict(d)
+
+    def test_session_var_defines_template_and_round_trips(self):
+        recipe = self.session_recipe().validate()
+        self.assertEqual(Recipe.from_dict(recipe.to_dict()).session[0].path, "JSESSIONID")
+
+    def test_session_var_must_come_from_a_cookie(self):
+        with self.assertRaisesRegex(RecipeError, "session vars"):
+            self.session_recipe(**{"from": "json"}).validate()
+
+    def test_resolve_strips_quotes_and_reports_missing_cookie(self):
+        from recursive_computer_use.network.recipe import resolve_session_vars
+
+        recipe = self.session_recipe()
+        self.assertEqual(resolve_session_vars(recipe, {"JSESSIONID": '"ajax:42"'}), {"sess_csrf": "ajax:42"})
+        with self.assertRaisesRegex(RecipeError, "log in again"):
+            resolve_session_vars(recipe, {})
+
+
 class TemplateTests(unittest.TestCase):
     def test_render_substitutes_nested_values_and_keeps_whole_value_types(self):
         body = {"n": "{{count}}", "msg": "hi {{name}}!", "list": ["{{name}}"], "k": 3}

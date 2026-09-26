@@ -8,7 +8,16 @@
 - ``loop``    : recipe first, computer-use fallback, relearn on failure.
 """
 
-from .recipe import Extract, Param, Recipe, RecipeError, Step, render, template_vars
+from .recipe import (
+    Extract,
+    Param,
+    Recipe,
+    RecipeError,
+    Step,
+    render,
+    resolve_session_vars,
+    template_vars,
+)
 from .runner import RunResult, StepResult, run_recipe
 
 __all__ = [
@@ -20,6 +29,7 @@ __all__ = [
     "Step",
     "StepResult",
     "render",
+    "resolve_session_vars",
     "run_recipe",
     "template_vars",
 ]
