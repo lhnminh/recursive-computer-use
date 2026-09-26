@@ -75,10 +75,10 @@ success. Move the decision to the server.
 
 ## X10. Dashboard and judge demo (~45 min)
 
-- [ ] Dashboard panel: recipes per site with version, status, uses, wins,
+- [x] Dashboard panel: recipes per site with version, status, uses, wins,
       lift, and the call chain (`site_map` via `$graphLookup`).
-- [ ] Panel: time and model calls per run, computer use vs recipe.
-- [ ] `scripts/network_demo.py`: reset → learn from one recording → run 3
+- [x] Panel: time and model calls per run, computer use vs recipe.
+- [x] `scripts/network_demo.py`: reset → learn from one recording → run 3
       new guests by recipe → flip redesign → replay fails → relearn → v2
       works. Print timings. Uses a scratch database.
 
@@ -88,5 +88,6 @@ success. Move the decision to the server.
 - X6: `8057ccd`, server-verified check-in API, CSRF sessions, reset guests, and v2 redesign.
 - X7: `b7399be`, headed HAR capture with local-only traces and redacted Atlas metadata.
 - X8: `cd0d207`, standard-library recipe replay with scoped redirects and verifier checks.
-- X9: pending, recipe-first loop with capture-and-learn fallback, superseding and CLI commands.
+- X9: `e1c9445`, recipe-first loop with capture-and-learn fallback, superseding and CLI commands.
+- X10: pending, recipe/site-map dashboard panels and scratch-Atlas redesign demo.
 - Phase 1: X1 `7a1e860`, X2 `61b1835`, X3 `f08a8da`, X4 `c35fc8f`, X5 `9e2ead7`.
