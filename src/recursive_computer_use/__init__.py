@@ -39,17 +39,17 @@ def main() -> None:
     parser.add_argument(
         "--no-guides",
         action="store_true",
-        help="Disable guide lookup and capture (already disabled by default).",
+        help="Disable guide lookup, replay, and capture (enabled by default).",
     )
     parser.add_argument(
         "--guides",
         action="store_true",
-        help="Capture a guide after a successful run.",
+        help="Capture a guide after a successful run (enabled by default).",
     )
     parser.add_argument(
         "--replay-guides",
         action="store_true",
-        help="Replay a saved guide, filling its site and requested text from the prompt.",
+        help="Replay a saved guide (enabled by default), filling its site and requested text from the prompt.",
     )
     parser.add_argument(
         "--site",
@@ -71,8 +71,8 @@ def main() -> None:
             args.prompt,
             model=args.model,
             verbose=args.verbose,
-            use_guides=args.guides and not args.no_guides,
-            replay_guides=args.replay_guides and not args.no_guides,
+            use_guides=(args.guides or not args.no_guides),
+            replay_guides=(args.replay_guides or not args.no_guides),
             site=args.site,
             task=args.task,
         )

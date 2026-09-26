@@ -88,6 +88,24 @@ class GuideCaptureAndReplayTests(unittest.TestCase):
             "hello world",
         )
 
+    def test_named_services_produce_generic_guide_site_keys(self):
+        cases = {
+            "On Reddit, draft a post saying hello": "reddit.com",
+            "Create a page in Notion": "notion.com",
+            "Post this via Mastodon": "mastodon.com",
+            "Search on example.org": "example.org",
+        }
+        for prompt, expected_site in cases.items():
+            with self.subTest(prompt=prompt):
+                site, task = infer_site_task(prompt)
+                self.assertEqual(site, expected_site)
+                self.assertEqual(task, prompt.lower())
+
+    def test_named_service_inference_skips_articles(self):
+        site, _ = infer_site_task("Click on the search button")
+
+        self.assertIsNone(site)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -164,8 +164,8 @@ def run(
     verbose: bool = False,
     site: str | None = None,
     task: str | None = None,
-    use_guides: bool = False,
-    replay_guides: bool = False,
+    use_guides: bool = True,
+    replay_guides: bool = True,
     guide_store: GuideStore | None = None,
 ) -> str:
     """
@@ -183,9 +183,11 @@ def run(
         Optional ``(site, task)`` key for guide lookup/capture. When omitted,
         they are inferred from *prompt* (see :func:`infer_site_task`).
     use_guides:
-        When True, record a guide from a successful free-navigation run.
+        When True, record or refresh a guide from a successful free-navigation
+        run. Enabled by default.
     replay_guides:
         When True, attempt to replay a matching saved guide before navigation.
+        Enabled by default.
     guide_store:
         Optional pre-built :class:`GuideStore`. When omitted and guide
         capture/replay is enabled, MongoDB is used when configured and the
@@ -227,6 +229,7 @@ def run(
     is_linkedin = _is_linkedin_workflow(site, task)
     guide_task = _guide_task_key(site, task)
 
+    replay_failed = False
     if replay_guides and store is not None and site and guide_task:
         guide = store.find_guide(site, guide_task, env.fingerprint)
         if guide is not None and guide.steps:
@@ -239,6 +242,7 @@ def run(
             store.bump_guide_stats(site, guide_task, env.fingerprint, ok=ok)
             if ok:
                 return final_text
+            replay_failed = True
             if verbose:
                 print("[guide] replay failed; falling back to screenshot-guided "
                       "navigation", file=sys.stderr)
@@ -250,7 +254,7 @@ def run(
     final_text = _free_navigation(client, sandbox, prompt, model=model, verbose=verbose)
 
     # -- Learn: distill the successful run into a coordinate guide ---------
-    if use_guides and store is not None and site and guide_task:
+    if (use_guides or replay_failed) and store is not None and site and guide_task:
         try:
             # Do not persist literal text typed into LinkedIn (it may be a
             # private post or message). Coordinates and action kinds are enough
@@ -571,11 +575,12 @@ def infer_site_task(prompt: str) -> tuple[str | None, str | None]:
     Best-effort extraction of a ``(site, task)`` key from a natural-language
     prompt.
 
-    * ``site`` — first hostname/domain found (e.g. ``openai.com``), lowercased.
+    * ``site`` — first hostname/domain found, or a service named after a
+      common site preposition ("on Reddit", "in Notion", "at Acme").
     * ``task`` — the whole prompt, lowercased and trimmed, as a coarse intent.
 
-    This is intentionally simple for v1; a smarter classifier can replace it
-    without changing callers.
+    Named services without an explicit domain are normalized to ``<name>.com``.
+    This is deliberately generic; it does not require a maintained service list.
     """
     import re
 
@@ -588,8 +593,20 @@ def infer_site_task(prompt: str) -> tuple[str | None, str | None]:
         m = re.search(r"\b([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b", prompt, re.IGNORECASE)
         if m:
             site = m.group(1).lower()
-        elif "linkedin" in prompt.lower():
-            site = "linkedin.com"
+        else:
+            # Common natural-language forms: "on Reddit", "in Notion", or
+            # "at Acme". Avoid treating articles and task verbs as services.
+            m = re.search(
+                r"\b(?:on|in|at|from|via|using|through)\s+"
+                r"([A-Za-z0-9][A-Za-z0-9-]*)\b",
+                prompt,
+                re.IGNORECASE,
+            )
+            if m and m.group(1).lower() not in {
+                "a", "an", "the", "my", "our", "your", "this", "that",
+                "website", "web", "browser", "internet",
+            }:
+                site = f"{m.group(1).lower()}.com"
     if site and site.startswith("www."):
         site = site[4:]
 
