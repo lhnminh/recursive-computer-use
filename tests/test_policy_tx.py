@@ -3,8 +3,13 @@ from __future__ import annotations
 import unittest
 from copy import deepcopy
 from datetime import datetime, timezone
+import os
 from types import SimpleNamespace
+import uuid
+from pathlib import Path
 
+from dotenv import load_dotenv
+from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
 
 from recursive_computer_use.evolution import (
@@ -15,6 +20,10 @@ from recursive_computer_use.evolution import (
     PolicyRepository,
     verify_evaluation_evidence,
 )
+from recursive_computer_use.evolution.policy import PolicySaveResult
+
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 class FakeCollection:
@@ -62,9 +71,9 @@ def harness_policy(version: int, status: str, parent: int | None) -> HarnessPoli
     )
 
 
-def evaluation() -> EvaluationRecord:
+def evaluation(task_key: str = "forms") -> EvaluationRecord:
     return EvaluationRecord(
-        task_key="forms",
+        task_key=task_key,
         baseline_policy_version=1,
         candidate_policy_version=2,
         baseline_metrics=EvaluationMetrics(success_rate=0.0),
@@ -116,8 +125,48 @@ class PolicyTransactionTests(unittest.TestCase):
                 raise DuplicateKeyError("duplicate")
 
         repo = PolicyRepository(DuplicateCollection(), self.evaluations)
-        with self.assertRaisesRegex(EvolutionValidationError, "already exists"):
-            repo.save(harness_policy(1, "accepted", None))
+        result = repo.save(harness_policy(1, "accepted", None))
+        self.assertIsInstance(result, PolicySaveResult)
+        self.assertFalse(result.saved)
+        self.assertIn("already exists", result.reason)
+
+
+@unittest.skipUnless(os.environ.get("MONGODB_URI"), "set MONGODB_URI to run Atlas integration")
+class AtlasPolicyTransactionTests(unittest.TestCase):
+    def test_failed_evaluation_insert_aborts_status_change(self):
+        client = MongoClient(os.environ["MONGODB_URI"], serverSelectionTimeoutMS=5000)
+        db = client["rcu_test_codex"]
+        task_key = f"codex-tx-{uuid.uuid4().hex}"
+        try:
+            db["policies"].insert_one(
+                {
+                    "task_key": task_key,
+                    "version": 2,
+                    "parent_version": 1,
+                    "status": "candidate",
+                    "rules": ["Inspect before acting."],
+                    "limits": {},
+                    "reason": "Transaction rollback test.",
+                    "created_at": datetime.now(timezone.utc),
+                }
+            )
+
+            class FailingEvaluations:
+                database = db
+
+                def insert_one(self, document, **kwargs):
+                    raise RuntimeError("force transaction abort")
+
+            repo = PolicyRepository(db["policies"], FailingEvaluations())
+            with self.assertRaisesRegex(RuntimeError, "force transaction abort"):
+                repo.record_evaluation(evaluation(task_key))
+            stored = db["policies"].find_one({"task_key": task_key, "version": 2})
+            self.assertEqual(stored["status"], "candidate")
+            self.assertEqual(db["evaluations"].count_documents({"task_key": task_key}), 0)
+        finally:
+            db["evaluations"].delete_many({"task_key": task_key})
+            db["policies"].delete_many({"task_key": task_key})
+            client.close()
 
 
 if __name__ == "__main__":

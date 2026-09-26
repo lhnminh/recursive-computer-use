@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
@@ -112,13 +112,16 @@ class PolicyRepository:
         self.policies = policies
         self.evaluations = evaluations
 
-    def save(self, policy: HarnessPolicy) -> Any:
+    def save(self, policy: HarnessPolicy) -> "PolicySaveResult":
         try:
-            return self.policies.insert_one(policy.to_document())
+            result = self.policies.insert_one(policy.to_document())
+            return PolicySaveResult(saved=True, insert_result=result)
         except DuplicateKeyError as exc:
-            raise EvolutionValidationError(
-                f"policy {policy.task_key} v{policy.version} already exists"
-            ) from exc
+            return PolicySaveResult(
+                saved=False,
+                reason=f"policy {policy.task_key} v{policy.version} already exists",
+                error=exc,
+            )
 
     def latest_accepted(self, task_key: str) -> HarnessPolicy | None:
         document = self.policies.find_one(
@@ -262,3 +265,13 @@ def with_status(policy: HarnessPolicy, status: str) -> HarnessPolicy:
     """Return a validated copy after a repository evaluation decision."""
 
     return replace(policy, status=status)
+
+
+@dataclass(frozen=True)
+class PolicySaveResult:
+    """Outcome of saving a candidate policy version."""
+
+    saved: bool
+    insert_result: Any = None
+    reason: str | None = None
+    error: DuplicateKeyError | None = None

@@ -18,17 +18,17 @@ retired skills make a good dashboard panel.
 
 ## X1. Atomic policy decisions (~30 min)
 
-- [ ] In `PolicyRepository.record_evaluation`, write the evaluation and
+- [x] In `PolicyRepository.record_evaluation`, write the evaluation and
       update the policy status in one transaction. Use a session when the
       collection supports it. Fall back to the current two writes for test
       doubles and standalone MongoDB.
-- [ ] Guard the status change: update only if `status` is still
+- [x] Guard the status change: update only if `status` is still
       `candidate`. If no document matched, abort. Another agent decided
       first.
-- [ ] In `PolicyRepository.save`, catch `DuplicateKeyError` on
+- [x] In `PolicyRepository.save`, catch `DuplicateKeyError` on
       (`task_key`, `version`). Two agents proposed the same version. Return
       a clear result instead of crashing.
-- [ ] Test against `rcu_test_codex`: an aborted transaction leaves no
+- [x] Test against `rcu_test_codex`: an aborted transaction leaves no
       evaluation and no status change.
 
 ## X2. Live policy feed with change streams (~45 min)
