@@ -49,6 +49,9 @@ RECIPE_FUSION_WEIGHTS = {"semantic": 2, "keyword": 1, "lift": 1, "proven": 1}
 # best match may be returned. Lift and "proven" re-order relevant recipes;
 # they must never pull in a recipe for a different task.
 RELEVANCE_MARGIN = 0.05
+# Atlas embeds a new recipe a few seconds after the write (measured 6-11 s).
+# When vector search sees nothing for the site, recent recipes count as relevant.
+EMBED_LAG = timedelta(minutes=2)
 
 
 def _utcnow() -> datetime:
@@ -287,18 +290,34 @@ class RecipeStore:
             docs = []
         if relevant is not None:
             if not relevant:
+                # Nothing on this site is embedded yet; a recipe saved seconds
+                # ago may be the right one.
+                relevant = self._unembedded_ids(mflt)
+            if not relevant:
                 return []
             docs = [d for d in docs if d["_id"] in relevant]
         docs = docs[:limit]
         if not docs:
-            # Index still building, or nothing matched by meaning: newest live
-            # recipes for the site, active first.
+            # Index still building, or the relevant recipe is not embedded yet:
+            # newest live recipes for the site, active first.
+            query: dict[str, Any] = {**mflt, "status": {"$in": LIVE}}
+            if relevant is not None:
+                query["_id"] = {"$in": list(relevant)}
             docs = list(
-                self.skills.find({**mflt, "status": {"$in": LIVE}})
+                self.skills.find(query)
                 .sort([("status", 1), ("version", -1)])  # "active" < "candidate"
                 .limit(limit)
             )
         return [Recipe.from_dict(d) for d in docs]
+
+    def _unembedded_ids(self, match: dict[str, Any]) -> set[ObjectId]:
+        """Live recipes written within ``EMBED_LAG``: vector search may not see them yet."""
+        since = _utcnow() - EMBED_LAG
+        query = {**match, "status": {"$in": LIVE}, "created_at": {"$gte": since}}
+        try:
+            return {d["_id"] for d in self.skills.find(query, {"_id": 1})}
+        except PyMongoError:
+            return set()
 
     def _relevant_ids(self, semantic_stage: dict[str, Any]) -> set[ObjectId] | None:
         """IDs within ``RELEVANCE_MARGIN`` of the best Voyage score; None if unavailable."""
