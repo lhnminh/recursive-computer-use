@@ -53,7 +53,35 @@ through results without buying.
   (or a fallback) on sites with branching flows.
 - The recipe was learned from one demonstration; the demo itself scored 1.0.
 
-## Reproduce
+## Run 2: official small setup with real Lucene search (n = 10)
+
+WebShop's own `-d small` configuration: 1,000 products, the official
+Pyserini/Lucene index (Java 21), unmodified search. Recipe learned from one
+recording of `fixed_12`; evaluated on `fixed_0` .. `fixed_9` (all in the
+standard test range 0-499). Same model and arms as above.
+
+| Arm | Avg score | Success | Sec/task | Model calls/task |
+|---|---|---|---|---|
+| **Learned recipe** | **1.000** | **10/10** | **8.6** | **2.9** |
+| Baseline browsing | 0.533 | 5/10 | 18.0 | 7.0 |
+
+Baseline failures: 3 hit the 15-turn limit while paging, 1 stopped with no
+parsable action on the page. Caveats: n = 10, and 1,000 products means far
+fewer distractors than the full 1.18M set, so both arms find the target more
+easily than in the full benchmark. The full set did not fit in 24 GB RAM
+(swap passed 28 GB while loading), so we stopped it.
+
+Reproduce: in `../webshop/web_agent_site/utils.py` set `DEBUG_PROD_SIZE = 1000`,
+build `search_engine/indexes_1k` with `python -m pyserini.index.lucene`
+(see `search_engine/run_indexing.sh`), `source webshop_env.sh`, start the app,
+then:
+
+```bash
+uv run python scripts/webshop_eval.py --learn --learn-task 12
+uv run python scripts/webshop_eval.py --tasks 0-9 --learn-task 12
+```
+
+## Reproduce (run 1)
 
 ```bash
 scripts/setup_webshop.sh                                   # once

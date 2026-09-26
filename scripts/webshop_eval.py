@@ -7,7 +7,11 @@ grade ourselves.
     # 1. learn once from one recorded purchase (headless browser, no desktop)
     uv run python scripts/webshop_eval.py --learn
     # 2. evaluate on held-out tasks
-    uv run python scripts/webshop_eval.py --tasks 1-30 --arms recipe,baseline
+    uv run python scripts/webshop_eval.py --arms recipe,baseline
+
+Standard WebShop split (seeded goal order, see baseline_models/env.py):
+test = fixed_0..fixed_499, dev = 500..1499, train = 1500+. The recipe is
+learned from ONE training task (default fixed_1500) and evaluated on test.
 
 Arms:
   recipe   : fill_params (1 model call) + replay the learned recipe over HTTP;
@@ -80,12 +84,12 @@ def task_text(session: str) -> str:
 # -- learn ---------------------------------------------------------------------
 
 
-def learn() -> None:
+def learn(learn_task: int = 1500) -> None:
     """Record one purchase headless, learn a recipe, save it to .recordings/."""
     from playwright.sync_api import sync_playwright
 
     OUT.mkdir(exist_ok=True)
-    session = "fixed_0"
+    session = f"fixed_{learn_task}"
     task = task_text(session)
     print("demo task:", task)
     with sync_playwright() as p:
@@ -242,16 +246,17 @@ def summarize(rows: list[dict[str, Any]]) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--learn", action="store_true", help="record the demo and learn the recipe")
-    ap.add_argument("--tasks", default="1-20", help="held-out fixed_N sessions, e.g. 1-30 (0 is the demo)")
+    ap.add_argument("--tasks", default="0-499", help="fixed_N task range; default is the standard test split")
+    ap.add_argument("--learn-task", type=int, default=1500, help="training task used for the one demonstration")
     ap.add_argument("--arms", default="recipe,baseline")
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args()
     if args.learn:
-        learn()
+        learn(args.learn_task)
         return
     recipe = Recipe.from_dict(json.loads(RECIPE_PATH.read_text())).validate()
     client = default_client()
-    task_indices = [i for i in parse_range(args.tasks) if i != 0]
+    task_indices = [i for i in parse_range(args.tasks) if i != args.learn_task]
     arms = [arm.strip() for arm in args.arms.split(",") if arm.strip()]
     if not arms or any(arm not in {"recipe", "baseline"} for arm in arms):
         ap.error("--arms must be a comma-separated subset of recipe,baseline")
