@@ -46,20 +46,21 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
       the learner can link a response value to a later request.
 - [x] Unit tests with a small hand-written HAR fixture.
 
-## N4. Learner (~60 min)
+## N4. Learner — done (live demo-API test pending X6)
 
-- [ ] `network/learner.py`: `learn_recipe(har_path, task, *, site,
+- [x] `network/learner.py`: `learn_recipe(har_path, task, *, site,
       task_key)`. One model call (`gpt-5.6-terra` via `auth.resolve`) with
       the redacted exchanges and the task text. Output must be JSON for
       `Recipe`. Validate; on failure, one repair call with the error.
-- [ ] Prompt rules: pick only the calls needed for the task; values the
+- [x] Prompt rules: pick only the calls needed for the task; values the
       user typed become `params`; values from earlier responses become
       `extract` + `{{var}}`; never copy a token value.
-- [ ] `fill_params(recipe, task)`: one small model call that maps the task
+- [x] `fill_params(recipe, task)`: one small model call that maps the task
       text to param values. Returns only declared param names.
-- [ ] Test with a fake OpenAI client and the fixture HAR.
+- [x] Test with a fake OpenAI client and the fixture HAR.
 - [ ] Live test against Codex's demo API once X6 is in: record → learn →
       Codex's runner succeeds.
+- [x] Live model test on the fixture HAR (`gpt-5.6-terra`): learned the 2-step session → checkin chain with csrf extraction in 11.7 s; `fill_params` 3.9 s.
 
 ## N5. Recipe store (~60 min)
 
@@ -89,3 +90,4 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 - N1: `network/recipe.py` — `Recipe`, `render`, `template_vars`, `validate()`; 13 tests.
 - N2: `schema.py` — `api_recipe` skills, `recordings` (TTL 14 d), `api_call` edges; applied to Atlas.
 - N3: `network/har.py` — filter + redact HAR, stable `<token:N>`/`<email:N>`/`<secret:N>` placeholders shared with the task text; 8 tests.
+- N4: `network/learner.py` — `learn_recipe` (1 call + 1 repair), `fill_params`; 7 tests + live model check.
