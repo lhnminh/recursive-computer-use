@@ -50,6 +50,7 @@ verifier must produce measurable evidence.
 ## Current capabilities
 
 - Bounded computer-use loop with a maximum of 30 model turns.
+- Local web chat (Python standard library, no framework) for submitting arbitrary desktop tasks without using the CLI.
 - OpenAI-compatible Chat Completions tool calling.
 - Persistent Python namespace for short desktop-control programs.
 - Screenshots returned to the configured vision-capable model.
@@ -96,6 +97,8 @@ src/recursive_computer_use/
   __main__.py              python -m entry point
   agent.py                 model loop and evolution integration
   auth.py                  Codex proxy or API-key credential resolution
+  chat_runtime.py          chat options, validation, and safe error text
+  webui.py                 stdlib http.server computer-use chat surface
   sandbox.py               restricted execution and policy enforcement
   store.py                 MongoDB run and action persistence
   schema.py                validators, indexes, search indexes for all collections
@@ -192,6 +195,43 @@ npx codex-as-api
 
 If the proxy is expected but not listening, the CLI fails before starting a
 desktop run and prints the startup command.
+
+## Local chatbot
+
+The primary product surface is a simple web chat that runs on the local
+machine. It uses only the Python standard library, no front-end framework:
+
+```powershell
+recursive-computer-use-chat
+```
+
+Alternatively:
+
+```powershell
+python -m recursive_computer_use.webui
+```
+
+Open `http://127.0.0.1:8600`, enable **Arm computer control**, and enter a task
+in the chat box. Each submitted message starts one bounded run through the same
+policy-enforced `agent.run` path used by the CLI. Set `RCU_WEB_PORT` to override
+the port.
+
+The chat surface:
+
+- binds to `127.0.0.1`, so another computer cannot remotely trigger mouse or
+  keyboard control;
+- allows only one desktop task at a time, even when several browser tabs are
+  open;
+- stops before sending, publishing, purchasing, deleting, or confirming by
+  default; users must explicitly disable that review boundary;
+- never displays or accepts MongoDB credentials, which remain in `.env`;
+- keeps chat history in the current browser tab;
+- uses existing sanitized telemetry and verifier-only promotion rules.
+
+If **Self-improvement** is enabled without a local verifier URL, the run is
+recorded as unverified and cannot promote a candidate policy. This is expected.
+The optional verifier must use plain HTTP on `localhost`, `127.0.0.1`, or
+`::1`.
 
 ### MongoDB modes
 
