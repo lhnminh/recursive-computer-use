@@ -77,15 +77,15 @@ retired skills make a good dashboard panel.
 
 ## X5. Judge-facing demo script (~30 min)
 
-- [ ] New `scripts/atlas_demo.py`. It runs against a scratch database
+- [x] New `scripts/atlas_demo.py`. It runs against a scratch database
       `rcu_demo` and prints one clear section per feature:
       1. Voyage `autoEmbed` finds a lesson by meaning, not by words.
       2. `$rankFusion` ranks useful lessons above merely similar ones.
       3. A change stream delivers an accepted policy to a second agent.
       4. `$jsonSchema` rejects a bad policy.
       5. The learning curve and lineage aggregations.
-- [ ] It waits for search indexes to be READY and cleans up at the end.
-- [ ] One command: `uv run python scripts/atlas_demo.py`.
+- [x] It waits for search indexes to be READY and cleans up at the end.
+- [x] One command: `uv run python scripts/atlas_demo.py`.
 
 ## Done log
 
@@ -93,3 +93,4 @@ retired skills make a good dashboard panel.
 - X1, `7a1e860`, atomic verdict/status update, duplicate save result, Atlas rollback check.
 - X2, `61b1835`, accepted-policy change stream with persisted resume and restart delivery.
 - X3, `f08a8da`, time-series learning curve and graph-lookup policy lineage queries.
+- X4, `c35fc8f`, read-only dashboard panels with Atlas queries and offline fixtures.
