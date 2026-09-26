@@ -47,7 +47,7 @@ from pymongo.operations import SearchIndexModel
 
 from .store import DEFAULT_DB, DEFAULT_URI, _redact_uri
 
-VALIDATION_ACTION = "warn"  # "warn" while iterating, "error" when stable
+VALIDATION_ACTION = "error"  # bad writes are rejected; "warn" to debug a shape change
 VALIDATION_LEVEL = "moderate"  # don't re-check old docs that already mismatch
 
 EMBEDDING_MODEL = "voyage-4"

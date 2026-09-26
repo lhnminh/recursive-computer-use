@@ -85,10 +85,15 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
       order (found by the Atlas test).
 - [x] Episodes get `mode` (`computer_use` | `api_recipe`) and explicit `site`.
 
-## C4. Strict validation (last, ~15 min, before 9 PM freeze)
+## C4. Strict validation — done
 
-- [ ] List documents that fail each validator. Fix, then
-      `VALIDATION_ACTION = "error"`.
+- [x] Checked every live collection: 0 invalid documents.
+- [x] Ran every Atlas test (learning, recipes, policy tx, feed, analytics)
+      with error mode on scratch databases: all pass, no rejected writes.
+- [x] `VALIDATION_ACTION = "error"`, applied to Atlas. A policy with
+      `status: "magic"` is rejected with `WriteError`.
+- [x] Atlas search tests retry for up to 60 s: a READY index can lag new
+      documents by a few seconds.
 
 ## Done log
 
@@ -99,3 +104,4 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 - N3: `network/har.py` — filter + redact HAR, stable `<token:N>`/`<email:N>`/`<secret:N>` placeholders shared with the task text; 8 tests.
 - N4: `network/learner.py` — `learn_recipe` (1 call + 1 repair), `fill_params`; 7 tests + live model check.
 - N5: `recipes.py` — RecipeStore (save/supersede/record_result/find_for_task/watch/call_chain); 5 Atlas tests.
+- C4: validation in error mode on Atlas; AGENTS.md updated.

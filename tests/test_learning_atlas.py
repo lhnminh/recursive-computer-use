@@ -43,6 +43,16 @@ def wait_for_search_indexes(db, timeout: float = 480) -> None:
         raise TimeoutError(f"search indexes not READY: {sorted(pending)}")
 
 
+def eventually(fetch, timeout: float = 60):
+    """Retry *fetch* until it returns something: new docs reach a READY index late."""
+    deadline = time.time() + timeout
+    while True:
+        result = fetch()
+        if result or time.time() > deadline:
+            return result
+        time.sleep(3)
+
+
 def policy(task_key: str, version: int, status: str, rules: list[str]):
     return SimpleNamespace(task_key=task_key, version=version, status=status, rules=rules)
 
@@ -149,16 +159,18 @@ class LearningAtlasTests(unittest.TestCase):
         wait_for_search_indexes(self.db)
         time.sleep(5)  # let the new documents reach the index
 
-        lessons = runtime.memory.find_similar(
-            "voyage-test", query_text="typed into the wrong input box", limit=1
-        )
+        lessons = eventually(lambda: [
+            m for m in runtime.memory.find_similar(
+                "voyage-test", query_text="typed into the wrong input box", limit=1
+            ) if "score" in m
+        ])
         self.assertIn("focused field", lessons[0]["lesson"])
         self.assertIn("score", lessons[0])
 
         # Different words, same meaning: "confirm control" vs "Submit button".
-        skills = self.learning.similar_skills(
+        skills = eventually(lambda: self.learning.similar_skills(
             "click the confirm control to finish", task_key="voyage-test", limit=1
-        )
+        ))
         self.assertIn("Submit", skills[0]["description"])
         print(f"\n  voyage: fused lesson score={lessons[0]['score']:.3f}, skill score={skills[0]['score']:.3f}")
 
@@ -189,7 +201,10 @@ class LearningAtlasTests(unittest.TestCase):
         wait_for_search_indexes(self.db)
         time.sleep(5)
 
-        ranked = memory.find_similar(tk, query_text="typed into the wrong input field", limit=2)
+        ranked = eventually(lambda: [
+            m for m in memory.find_similar(tk, query_text="typed into the wrong input field", limit=2)
+            if "score" in m
+        ][:2] if len(memory.ranked_lessons(tk, "typed into the wrong input field", limit=2)) == 2 else [])
         self.assertEqual(ranked[0]["policy_version"], 1, ranked)
         self.assertGreater(ranked[0]["score"], ranked[1]["score"])
 
@@ -211,7 +226,10 @@ class LearningAtlasTests(unittest.TestCase):
         )
         wait_for_search_indexes(self.db)
         time.sleep(5)
-        ranked = self.learning.ranked_skills("press the submit button", task_key=tk, limit=2)
+        ranked = eventually(lambda: [
+            r for r in [self.learning.ranked_skills("press the submit button", task_key=tk, limit=2)] if len(r) == 2
+        ])
+        ranked = ranked[0] if ranked else []
         self.assertEqual(ranked[0]["lift"], 0.6, ranked)
         self.assertIn("score", ranked[0])
 

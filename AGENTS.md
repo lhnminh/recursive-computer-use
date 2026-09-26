@@ -351,10 +351,15 @@ The cluster runs MongoDB 8.0. These were tested on it:
 
 ### Schema validation
 
-Validators run in `warn` mode (`schema.VALIDATION_ACTION`). A mismatched
-write succeeds but logs a warning. When you add or rename a persisted field,
-update its validator in `schema.py` in the same commit. Validation will be
-switched to `error` before the demo, and then a missed update rejects writes.
+Validators run in `error` mode (`schema.VALIDATION_ACTION`, since
+2026-09-26). MongoDB rejects a write whose shape does not match. Unknown
+extra fields are allowed; wrong types, bad enum values and missing required
+fields are not. When you add or rename a persisted field or enum value,
+update its validator in `schema.py` in the same commit and rerun it against
+Atlas. The store and learning layers swallow write errors and print a
+`[store]`/`[learning]` warning, so watch the logs. To debug a shape change,
+set `VALIDATION_ACTION = "warn"` locally and rerun `schema.py` on a scratch
+database.
 
 ## Action recording rules
 

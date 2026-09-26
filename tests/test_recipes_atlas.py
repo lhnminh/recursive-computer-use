@@ -23,7 +23,7 @@ from recursive_computer_use.recipes import RecipeStore
 from recursive_computer_use.schema import ensure_schema
 
 sys.path.insert(0, str(Path(__file__).parent))
-from test_learning_atlas import wait_for_search_indexes  # noqa: E402
+from test_learning_atlas import eventually, wait_for_search_indexes  # noqa: E402
 from test_recipe import EXAMPLE  # noqa: E402
 
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -108,11 +108,18 @@ class RecipeStoreAtlasTests(unittest.TestCase):
 
         wait_for_search_indexes(self.db)
         time.sleep(5)
-        found = self.store.find_for_task(
+        found = eventually(lambda: [
+            r for r in self.store.find_for_task(
+                "register the arriving visitor Grace Hopper", site="127.0.0.1:8765", limit=2
+            ) if r.id == new_id
+        ] and self.store.find_for_task(
             "register the arriving visitor Grace Hopper", site="127.0.0.1:8765", limit=2
-        )
+        ))
         self.assertEqual(found[0].id, new_id, [r.name for r in found])
-        pizza = self.store.find_for_task("I want a large pepperoni pie delivered", limit=1)
+        pizza = eventually(lambda: [
+            r for r in self.store.find_for_task("I want a large pepperoni pie delivered", limit=1)
+            if r.name == "127.0.0.1:8765:order"
+        ]) or self.store.find_for_task("I want a large pepperoni pie delivered", limit=1)
         self.assertEqual(pizza[0].name, "127.0.0.1:8765:order")
         self.assertEqual(self.store.find_for_task("anything", site="nowhere:1"), [])
 
