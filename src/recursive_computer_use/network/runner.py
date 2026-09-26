@@ -6,13 +6,14 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
+from html import unescape as html_unescape
 from http.cookiejar import CookieJar
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, Request, build_opener
 
-from .recipe import Recipe, RecipeError, render, resolve_session_vars
+from .recipe import Choose, Recipe, RecipeError, render, render_url, resolve_session_vars
 from .session import cookie_jar_for, cookies_for, load_storage_state
 
 STEP_TIMEOUT_S = 10
@@ -52,6 +53,8 @@ def run_recipe(
     params: Mapping[str, Any],
     *,
     session_cookies: Mapping[str, str] | None = None,
+    chooser: Chooser | None = None,
+    task: str = "",
 ) -> RunResult:
     """Run a recipe and report per-step timings and the verifier's verdict.
 
@@ -59,6 +62,10 @@ def run_recipe(
     (name -> value) if given, else the local saved session (see
     ``network.session``), else none. ``recipe.session`` vars are read from
     those cookies; a missing one fails the run with "log in again".
+
+    ``step.choose`` picks values from a step's HTML response. *chooser*
+    decides (usually one small model call that sees *task*); without one the
+    first candidate wins. See :data:`Chooser`.
 
     Errors are returned without response bodies or request headers, which can
     contain task data or session material.
@@ -85,7 +92,7 @@ def run_recipe(
         values.update(resolve_session_vars(recipe, session_cookies))
         opener = build_opener(HTTPCookieProcessor(jar), _ScopedRedirectHandler(recipe.site))
         for step in recipe.steps:
-            url = render(step.url, values)
+            url = render_url(step.url, values)
             headers = render(step.headers, values)
             body = render(step.body, values)
             data, headers = _encode_body(body, step.body_format, headers)
@@ -98,6 +105,8 @@ def run_recipe(
                 values[extract.var] = _extract(
                     extract.source, extract.path, response, body_bytes, jar, url
                 )
+            for choose in step.choose:
+                values[choose.var] = _choose(choose, body_bytes, chooser, task)
 
         result.vars = values
         if recipe.verify:
@@ -134,6 +143,58 @@ def run_recipe(
     finally:
         result.duration_ms = int((time.monotonic() - started) * 1000)
     return result
+
+
+# chooser(task, choose, candidates) -> pick
+#   mode "one":      candidates = [{"value", "context"}], return an index (int)
+#   mode "per_name": candidates = [{"name", "values": [...]}], return {name: value}
+Chooser = Callable[[str, Choose, list[dict[str, Any]]], Any]
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_SPACE_RE = re.compile(r"\s+")
+
+
+def candidates_for(choose: Choose, html: str) -> list[dict[str, Any]]:
+    """Candidates for *choose* in *html*, deduplicated, in page order."""
+    if choose.mode == "per_name":
+        groups: dict[str, list[str]] = {}
+        for m in re.finditer(choose.regex, html):
+            values = groups.setdefault(m.group(1), [])
+            if m.group(2) not in values:
+                values.append(m.group(2))
+        return [{"name": n, "values": v} for n, v in list(groups.items())[: choose.max]]
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for m in re.finditer(choose.regex, html):
+        value = m.group(1)
+        if value in seen:
+            continue
+        seen.add(value)
+        window = html[m.end() : m.end() + choose.context * 6]
+        text = _SPACE_RE.sub(" ", html_unescape(_TAG_RE.sub(" ", window))).strip()
+        out.append({"value": value, "context": text[: choose.context]})
+        if len(out) >= choose.max:
+            break
+    return out
+
+
+def _choose(choose: Choose, body: bytes, chooser: Chooser | None, task: str) -> Any:
+    candidates = candidates_for(choose, body.decode("utf-8", errors="replace"))
+    if choose.mode == "per_name":
+        picked = chooser(task, choose, candidates) if (chooser and candidates) else {}
+        allowed = {c["name"]: c["values"] for c in candidates}
+        clean = {
+            str(k): str(v)
+            for k, v in (picked or {}).items()
+            if k in allowed and str(v) in allowed[k]
+        }
+        return json.dumps(clean)
+    if not candidates:
+        raise _RunFailure(f"no candidates for {choose.var!r}")
+    index = chooser(task, choose, candidates) if chooser else 0
+    if not isinstance(index, int) or not 0 <= index < len(candidates):
+        index = 0
+    return candidates[index]["value"]
 
 
 class _RunFailure(RuntimeError):

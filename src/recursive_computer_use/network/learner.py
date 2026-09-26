@@ -43,7 +43,9 @@ Write the smallest chain of requests that completes the task on its own.
 Rules:
 - Keep only the requests needed for the task. Drop page loads, polling,
   telemetry and anything the task does not need.
-- Values the user typed or chose become params. Name params in snake_case.
+- Values the user typed (search words, form text) become params. Values that
+  only identify the session or run in the URL (e.g. a session id path
+  segment) also become params. Name params in snake_case.
   Use the typed value as "example", unless it is a placeholder.
 - A value that a request needs and that an earlier response supplied becomes
   an "extract" on that earlier step plus {{var}} where it is used. Extract
@@ -56,7 +58,22 @@ Rules:
 - Every URL stays on the given site. Use the full URL with scheme.
 - Keep headers the server needs (content-type, CSRF-style x- headers).
 - "body_format" is "json", "form" or "text", matching the recorded request.
-- "expect_status" is the recorded response status of that step.
+- "expect_status" is the recorded response status of that step. If it was a
+  redirect (3xx), use the status of the page it led to (usually 200): the
+  runner follows same-site redirects.
+- HTML responses show "html_links" (href + text) and "html_hints" (forms,
+  hidden/radio/checkbox inputs, select options). When a later request uses a
+  value the user PICKED from a list on an earlier HTML page (which search
+  result to open, which color or size to select), do not make it a param.
+  Add to that earlier step "choose": [{"var", "regex", "mode"}]:
+  - mode "one": regex with ONE capture group that matches each candidate
+    value in the raw HTML, e.g. in result links "item/([A-Z0-9]+)/".
+  - mode "per_name": regex with TWO capture groups (option name, option
+    value), e.g. for radio inputs 'name="([^"]+)" value="([^"]+)"'. The var
+    holds a JSON object {name: value} of the chosen options; use {{var}}
+    where the recording sent the chosen options (an empty choice is {}).
+  A model later picks among the candidates using the task text.
+- Put {{var}} for a whole URL path segment; values are URL-encoded.
 - "verify": {"url": ...} only if you saw a result/status endpoint on the
   site; otherwise null.
 
@@ -64,15 +81,18 @@ Reply with one JSON object and nothing else:
 {"name": str, "description": str (one sentence: what the task does and its
 inputs), "params": [{"name", "description", "example"}], "steps": [{"id",
 "method", "url", "headers", "body", "body_format", "expect_status",
-"extract": [{"var", "from", "path"}]}], "verify": {"url"} | null}
+"extract": [{"var", "from", "path"}], "choose": [{"var", "regex", "mode"}]}],
+"verify": {"url"} | null}
 """
 
 FILL_SYSTEM = """You extract parameter values for an API recipe from a task.
 
 You get the recipe's description, its params (name, description, example)
-and a task. Reply with one JSON object mapping every param name to the value
-the task gives for it, as a string. Use exactly the given names. If the task
-does not give a value for a param, map it to null."""
+and a task. Reply with one JSON object mapping every param name to its value
+for this task, as a string. Use exactly the given names. Copy values the task
+states (ids, names, emails). Compose values the user would write themselves,
+such as a search query, from the task (short keywords, like the example).
+Map a param to null only if the task gives no basis for it at all."""
 
 
 class LearnError(RuntimeError):
@@ -164,6 +184,52 @@ def fill_params(
 # -- helpers -------------------------------------------------------------------
 
 
+CHOOSE_SYSTEM = """You pick for a web task. You get the task and numbered
+candidates found on a page (a value plus the page text around it). Reply
+with one JSON object: {"index": <number of the best candidate>}."""
+
+CHOOSE_OPTIONS_SYSTEM = """You pick product options for a web task. You get
+the task and option groups (name + possible values). Pick the value per
+group that the task asks for; skip groups the task does not mention. Reply
+with one JSON object mapping option name to the exact value string."""
+
+
+def llm_chooser(
+    *,
+    client: Any = None,
+    model: str = DEFAULT_MODEL,
+    stats: dict[str, int] | None = None,
+) -> Any:
+    """A ``network.runner`` chooser backed by one small model call per choice."""
+
+    def choose(task: str, ch: Any, candidates: list[dict[str, Any]]) -> Any:
+        nonlocal client
+        client = client or default_client()
+        if stats is not None:
+            stats["llm_calls"] = stats.get("llm_calls", 0) + 1
+        if ch.mode == "per_name":
+            payload = {"task": task, "options": candidates}
+            reply = _complete(client, model, [
+                {"role": "system", "content": CHOOSE_OPTIONS_SYSTEM},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ])
+            try:
+                return _parse_json(reply)
+            except ValueError:
+                return {}
+        numbered = [{"n": i, "value": c["value"], "text": c["context"]} for i, c in enumerate(candidates)]
+        reply = _complete(client, model, [
+            {"role": "system", "content": CHOOSE_SYSTEM},
+            {"role": "user", "content": json.dumps({"task": task, "candidates": numbered}, ensure_ascii=False)},
+        ])
+        try:
+            return int(_parse_json(reply).get("index", 0))
+        except (ValueError, TypeError):
+            return 0
+
+    return choose
+
+
 def _complete(client: Any, model: str, messages: list[dict[str, Any]]) -> str:
     response = client.chat.completions.create(model=model, messages=messages)
     return response.choices[0].message.content or ""
@@ -195,6 +261,10 @@ def _to_recipe(reply: str, *, site: str, task_key: str, name: str | None) -> Rec
         scope={"site": site, "task_key": task_key},
     )
     data["name"] = name or f"{site}:{_slug(data.get('name') or task_key)}"
+    for step in data.get("steps") or []:
+        # The runner follows same-site redirects, so a recorded 3xx ends as 2xx.
+        if isinstance(step, dict) and 300 <= int(step.get("expect_status") or 200) < 400:
+            step["expect_status"] = 200
     for param in data.get("params") or []:
         if isinstance(param, dict) and _PLACEHOLDER.search(str(param.get("example") or "")):
             param["example"] = None  # never store a redacted value as an example

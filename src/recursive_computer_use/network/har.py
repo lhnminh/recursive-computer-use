@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
 import re
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ from urllib.parse import parse_qsl, urlsplit
 MAX_STRING = 200  # characters kept per string value
 MAX_LIST = 5  # items kept per JSON list
 MAX_HTML_HINTS = 20
+MAX_HTML_LINKS = 25
 
 _STATIC_EXT = re.compile(
     r"\.(?:js|mjs|css|map|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|otf|eot|mp4|webm|mp3)$", re.I
@@ -62,8 +64,12 @@ _KEEP_REQUEST_HEADERS = re.compile(
 )
 _KEEP_RESPONSE_HEADERS = re.compile(r"^(content-type|location|set-cookie|x-[a-z0-9-]+)$", re.I)
 _HTML_HINT = re.compile(
-    r"<(?:input[^>]*type=[\"']?hidden[^>]*|meta[^>]*(?:csrf|xsrf|token)[^>]*|form[^>]*)>", re.I
+    r"<(?:input[^>]*type=[\"']?(?:hidden|radio|checkbox)[^>]*|meta[^>]*(?:csrf|xsrf|token)[^>]*"
+    r"|form[^>]*|option[^>]*)>",
+    re.I,
 )
+# href may hold HTML entities like &#39;, so '#' is allowed; bare "#..." anchors are skipped below.
+_HTML_LINK = re.compile(r"<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
 
 
 class Redactor:
@@ -286,7 +292,21 @@ def _response_body(content: dict[str, Any], mime: str, redactor: Redactor) -> An
             return redactor.value("body", text)
     if "html" in mime:
         hints = [_redact_tag(tag, redactor) for tag in _HTML_HINT.findall(text)[:MAX_HTML_HINTS]]
-        return {"html_hints": hints} if hints else None
+        links = []
+        for href, label in _HTML_LINK.findall(text):
+            href = html.unescape(href)
+            if href.startswith(("#", "mailto:", "javascript:", "http://", "https://", "//")):
+                continue  # anchors and absolute links; same-site paths are enough
+            label = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", label)).strip()
+            links.append({"href": redactor.redact_text(href), "text": redactor.redact_text(label)[:80]})
+            if len(links) >= MAX_HTML_LINKS:
+                break
+        out: dict[str, Any] = {}
+        if hints:
+            out["html_hints"] = hints
+        if links:
+            out["html_links"] = links
+        return out or None
     return redactor.value("body", text)
 
 
