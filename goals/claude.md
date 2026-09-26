@@ -106,3 +106,4 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 - N5: `recipes.py` — RecipeStore (save/supersede/record_result/find_for_task/watch/call_chain); 5 Atlas tests.
 - C4: validation in error mode on Atlas; AGENTS.md updated.
 - WebShop eval: `choose` steps + learner support; learned recipe vs browsing on 105 human tasks: 0.714 vs 0.519 avg score, 52% vs 36% success, 8.6 s vs 22.5 s, 2.6 vs 7.9 model calls. See docs/webshop-eval.md.
+- Live demo `demo/webshop_live.py`: teach once -> MongoDB -> any agent reuses; verify-before-share; change-stream feed.

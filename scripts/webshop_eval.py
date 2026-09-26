@@ -36,7 +36,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlencode, urljoin
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
@@ -58,11 +58,25 @@ OUT = Path(".recordings")
 RECIPE_PATH = OUT / "webshop_recipe.json"
 DEMO_HAR = OUT / "webshop_demo.har"
 REWARD_RE = r'id="reward">[^<]*<pre>\s*([0-9.eE+-]+)\s*</pre>'
+# A replay scoring at least this counts as a verified success for the recipe's
+# lifecycle (promote / fail streak). The WebShop score itself is kept as is.
+RECIPE_OK_REWARD = 0.5
 MAX_BASELINE_STEPS = 15
 PAGE_CHARS = 6000
 
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
+
+
+Event = Callable[[dict[str, Any]], None]
+
+
+def _emit(on_event: Event | None, kind: str, text: str, **extra: Any) -> None:
+    """Report progress: to *on_event* (the live demo page) or to stdout."""
+    if on_event is None:
+        print(f"  [{kind}] {text}", flush=True)
+    else:
+        on_event({"kind": kind, "text": text, "t": time.time(), **extra})
 
 
 def page_text(markup: str) -> str:
@@ -84,14 +98,20 @@ def task_text(session: str) -> str:
 # -- learn ---------------------------------------------------------------------
 
 
-def learn(learn_task: int = 1500) -> None:
-    """Record one purchase headless, learn a recipe, save it to .recordings/."""
+def learn(learn_task: int = 1500, *, store: Any = None, on_event: Event | None = None) -> Recipe:
+    """Record one purchase headless and learn a recipe from it.
+
+    The recipe is cached in .recordings/ and, with *store* (a
+    ``recipes.RecipeStore``), saved to MongoDB so every agent on the same
+    database can find and reuse it.
+    """
     from playwright.sync_api import sync_playwright
 
     OUT.mkdir(exist_ok=True)
     session = f"fixed_{learn_task}"
     task = task_text(session)
-    print("demo task:", task)
+    _emit(on_event, "task", task)
+    _emit(on_event, "record", "Recording one purchase in a headless browser (network traffic -> HAR)")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         ctx = browser.new_context(record_har_path=str(DEMO_HAR), record_har_content="embed")
@@ -111,35 +131,101 @@ def learn(learn_task: int = 1500) -> None:
         reward = page.inner_text("#reward")
         ctx.close()
         browser.close()
-    print("demo purchase:", _WS.sub(" ", reward))
+    _emit(on_event, "record", "Demo purchase done: " + _WS.sub(" ", reward))
+    _emit(on_event, "learn", "Model reads the redacted traffic and writes an API recipe...")
     t = time.time()
     recipe = learn_recipe(DEMO_HAR, task, site=SITE, task_key="webshop")
-    print(f"learned in {time.time() - t:.1f}s")
-    RECIPE_PATH.write_text(json.dumps(recipe.to_dict(), indent=1))
+    _emit(on_event, "learn", f"Recipe learned in {time.time() - t:.1f}s", recipe=recipe.to_dict())
     for step in recipe.steps:
-        print(f"  {step.method} {step.url}  choose={[c.var + ':' + c.mode for c in step.choose]}")
-    print("  params:", [p.name for p in recipe.params])
+        chooses = ", ".join(f"choose {c.var}" for c in step.choose)
+        _emit(on_event, "step", f"{step.method} {step.url.split(SITE, 1)[-1]}" + (f"  ({chooses})" if chooses else ""))
+    RECIPE_PATH.write_text(json.dumps(recipe.to_dict(), indent=1))
+    if store is not None:
+        recipe.id = store.save_candidate(recipe)
+        _emit(on_event, "atlas", f"Saved to MongoDB as {recipe.name} v{recipe.version} ({recipe.status})",
+              recipe_id=str(recipe.id))
+    return recipe
 
 
 # -- arms ----------------------------------------------------------------------
 
 
-def run_recipe_arm(recipe: Recipe, session: str, client: Any) -> dict[str, Any]:
+def run_recipe_arm(
+    recipe: Recipe, session: str, client: Any, on_event: Event | None = None, *, quiet: bool = True
+) -> dict[str, Any]:
     stats = {"llm_calls": 0}
     t = time.time()
     r = copy.deepcopy(recipe)
     r.steps[-1].extract.append(Extract(var="__reward", source="regex", path=REWARD_RE))  # grader side
+    emit = on_event if (on_event or not quiet) else (lambda _e: None)
+    base_chooser = llm_chooser(client=client, stats=stats)
+
+    def chooser(task_: str, ch: Any, candidates: list[dict[str, Any]]) -> Any:
+        pick = base_chooser(task_, ch, candidates)
+        if ch.mode == "one" and isinstance(pick, int) and 0 <= pick < len(candidates):
+            _emit(emit, "choose", f"Picked {candidates[pick]['value']}: {candidates[pick]['context'][:90]}")
+        elif ch.mode == "per_name":
+            _emit(emit, "choose", f"Options: {json.dumps(pick) if pick else 'none'}")
+        return pick
+
+    def on_step(step: Any, chosen: dict[str, Any]) -> None:
+        _emit(emit, "http", f"{step.id}: HTTP {step.status} in {step.ms} ms")
+
     try:
         task = task_text(session)
+        _emit(emit, "task", task)
         params = fill_params(r, task, client=client)
         stats["llm_calls"] += 1
-        result = run_recipe(r, params, session_cookies={}, chooser=llm_chooser(client=client, stats=stats), task=task)
+        _emit(emit, "params", "Params: " + ", ".join(f"{k}={v!r}" for k, v in params.items()))
+        result = run_recipe(r, params, session_cookies={}, chooser=chooser, task=task, on_step=on_step)
         reward = float(result.vars.get("__reward", 0.0)) if result.ok or "__reward" in result.vars else 0.0
         error = None if "__reward" in result.vars else (result.error or "no reward")
     except Exception as exc:  # noqa: BLE001 - an eval row, not a crash
         reward, error = 0.0, repr(exc)[:200]
-    return {"arm": "recipe", "session": session, "reward": reward, "seconds": time.time() - t,
-            "llm_calls": stats["llm_calls"], "error": error}
+    row = {"arm": "recipe", "session": session, "reward": reward, "seconds": time.time() - t,
+           "llm_calls": stats["llm_calls"], "error": error}
+    _emit(emit, "done", f"Score {reward:.2f} in {row['seconds']:.1f}s, {row['llm_calls']} model calls"
+          + (f" ({error})" if error else ""), row=row)
+    return row
+
+
+def atlas_store() -> Any:
+    """RecipeStore on the shared MongoDB database (MONGODB_URI / MONGODB_DB)."""
+    import os
+
+    from dotenv import load_dotenv
+    from pymongo import MongoClient
+
+    from recursive_computer_use.recipes import RecipeStore
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+    client = MongoClient(os.environ["MONGODB_URI"], serverSelectionTimeoutMS=5000)
+    return RecipeStore(client[os.environ.get("MONGODB_DB", "recursive_computer_use")])
+
+
+def run_from_atlas(store: Any, session: str, client: Any, on_event: Event | None = None,
+                   *, quiet: bool = True) -> dict[str, Any]:
+    """What any agent on the shared database does: find a recipe, use it, report back."""
+    emit = on_event if (on_event or not quiet) else (lambda _e: None)
+    t = time.time()
+    need = instruction(session)
+    found = store.find_for_task(need, site=SITE, limit=1)
+    if not found:
+        _emit(emit, "atlas", "No recipe for this task in MongoDB yet. Teach one first.")
+        row = {"arm": "recipe", "session": session, "reward": 0.0, "seconds": time.time() - t,
+               "llm_calls": 0, "error": "no recipe in Atlas"}
+        _emit(emit, "done", "No recipe", row=row)
+        return row
+    recipe = found[0]
+    doc = store.skills.find_one({"_id": recipe.id}, {"uses": 1, "wins": 1, "lift": 1}) or {}
+    _emit(emit, "atlas", f"Found in MongoDB by meaning: {recipe.name} v{recipe.version} ({recipe.status}), "
+          f"used {doc.get('uses', 0)}x, won {doc.get('wins', 0)}x", recipe_id=str(recipe.id))
+    row = run_recipe_arm(recipe, session, client, emit)
+    status = store.record_result(recipe.id, ok=row["reward"] >= RECIPE_OK_REWARD,
+                                 run_ms=int(row["seconds"] * 1000), steps=[{}] * len(recipe.steps),
+                                 task=need, llm_calls=row["llm_calls"])
+    _emit(emit, "atlas", f"Result written to MongoDB: episode + uses/wins/lift; recipe is now {status}")
+    return row
 
 
 BASELINE_SYSTEM = """You shop on a web store to satisfy an instruction. Each turn you
@@ -149,7 +235,8 @@ Buy (click "Buy Now") once you are on the best matching product with the
 right options selected. Be efficient."""
 
 
-def run_baseline_arm(session: str, client: Any) -> dict[str, Any]:
+def run_baseline_arm(session: str, client: Any, on_event: Event | None = None, *, quiet: bool = True) -> dict[str, Any]:
+    emit = on_event if (on_event or not quiet) else (lambda _e: None)
     t = time.time()
     opener = build_opener(HTTPCookieProcessor())
     url, data = f"{BASE}/{session}", None
@@ -157,6 +244,8 @@ def run_baseline_arm(session: str, client: Any) -> dict[str, Any]:
     calls, reward, error = 0, 0.0, None
     try:
         task = task_text(session)
+        need = task.split("Instruction:", 1)[-1].strip()
+        _emit(emit, "task", task)
         for _ in range(MAX_BASELINE_STEPS):
             with opener.open(Request(url, data=data), timeout=30) as resp:
                 url, markup = resp.geturl(), resp.read().decode("utf-8", "replace")
@@ -177,9 +266,13 @@ def run_baseline_arm(session: str, client: Any) -> dict[str, Any]:
                 act = _parse_json(reply)
             except ValueError:
                 act = {"action": "click", "n": 0}
+            can_search = 'name="search_query"' in markup
+            if act.get("action") != "search" and can_search and not actions:
+                act = {"action": "search", "query": act.get("query") or need}  # search is the only move here
             if act.get("action") == "search":
                 q = str(act.get("query", ""))[:200]
                 history.append(f"search[{q}]")
+                _emit(emit, "action", f"search[{q}]")
                 url, data = f"{BASE}/{session}", urlencode({"search_query": q}).encode()
                 continue
             n = int(act.get("n", 0)) if str(act.get("n", "0")).isdigit() else 0
@@ -188,13 +281,17 @@ def run_baseline_arm(session: str, client: Any) -> dict[str, Any]:
                 error = "no actions"
                 break
             history.append(f"click[{a['label']}]")
+            _emit(emit, "action", f"click[{a['label']}]")
             url, data = a["url"], (b"" if a["method"] == "POST" else None)
         else:
             error = "step limit"
     except Exception as exc:  # noqa: BLE001
         error = repr(exc)[:200]
-    return {"arm": "baseline", "session": session, "reward": reward, "seconds": time.time() - t,
-            "llm_calls": calls, "error": error, "trace": history}
+    row = {"arm": "baseline", "session": session, "reward": reward, "seconds": time.time() - t,
+           "llm_calls": calls, "error": error, "trace": history}
+    _emit(emit, "done", f"Score {reward:.2f} in {row['seconds']:.1f}s, {calls} model calls"
+          + (f" ({error})" if error else ""), row=row)
+    return row
 
 
 def _actions(markup: str, url: str) -> list[dict[str, str]]:
@@ -250,11 +347,14 @@ def main() -> None:
     ap.add_argument("--learn-task", type=int, default=1500, help="training task used for the one demonstration")
     ap.add_argument("--arms", default="recipe,baseline")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--atlas", action="store_true",
+                    help="save the learned recipe to MongoDB / find it there per task and write results back")
     args = ap.parse_args()
+    store = atlas_store() if args.atlas else None
     if args.learn:
-        learn(args.learn_task)
+        learn(args.learn_task, store=store)
         return
-    recipe = Recipe.from_dict(json.loads(RECIPE_PATH.read_text())).validate()
+    recipe = None if store else Recipe.from_dict(json.loads(RECIPE_PATH.read_text())).validate()
     client = default_client()
     task_indices = [i for i in parse_range(args.tasks) if i != args.learn_task]
     arms = [arm.strip() for arm in args.arms.split(",") if arm.strip()]
@@ -263,7 +363,12 @@ def main() -> None:
 
     def run(job: tuple[str, str]) -> dict[str, Any]:
         arm, s = job
-        row = run_recipe_arm(recipe, s, client) if arm == "recipe" else run_baseline_arm(s, client)
+        if arm == "baseline":
+            row = run_baseline_arm(s, client)
+        elif store is not None:
+            row = run_from_atlas(store, s, client)
+        else:
+            row = run_recipe_arm(recipe, s, client)
         print(f"{arm:8} {s:9} reward={row['reward']:.2f} {row['seconds']:5.1f}s calls={row['llm_calls']}"
               + (f" err={row['error']}" if row["error"] else ""), flush=True)
         return row

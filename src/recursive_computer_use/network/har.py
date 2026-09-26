@@ -30,7 +30,7 @@ from urllib.parse import parse_qsl, urlsplit
 MAX_STRING = 200  # characters kept per string value
 MAX_LIST = 5  # items kept per JSON list
 MAX_HTML_HINTS = 20
-MAX_HTML_LINKS = 25
+MAX_HTML_LINKS = 12
 
 _STATIC_EXT = re.compile(
     r"\.(?:js|mjs|css|map|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|otf|eot|mp4|webm|mp3)$", re.I

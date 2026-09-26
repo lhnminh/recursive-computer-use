@@ -53,6 +53,35 @@ through results without buying.
   (or a fallback) on sites with branching flows.
 - The recipe was learned from one demonstration; the demo itself scored 1.0.
 
+## Live demo (shared learning through MongoDB)
+
+```bash
+uv run python demo/webshop_live.py    # http://127.0.0.1:8790
+```
+
+Needs WebShop on :3000 (small setup), the Codex proxy on :18080 and
+`MONGODB_URI` in `.env`. Standard library HTTP server, loopback only.
+
+- **Teach:** records one purchase headless, learns a recipe, saves it to
+  MongoDB as a `candidate`, then verifies it on its own demo task. A pass
+  promotes it to `active`; a fail retires it and the learner tries again.
+- **Race:** an agent with no local recipe finds one in MongoDB by meaning
+  (Voyage + `$rankFusion`), replays it, and writes the verified result back
+  (episode, uses/wins/lift, status). A browsing agent with no memory runs the
+  same task side by side.
+- **MongoDB live:** a change stream on `skills` shows every recipe update, as
+  any other agent on the same database receives it.
+
+Other processes use the same shared recipes with
+`uv run python scripts/webshop_eval.py --atlas ...` (learn saves to MongoDB;
+eval finds the recipe per task and writes results back).
+
+Observed on 2026-09-26 (learned from `fixed_12`, a body-lotion purchase):
+`fixed_7` drawstring shorts 1.00 in 5.2 s (3 model calls), `fixed_3` storage
+ottoman 1.00 in 6.0 s; browsing agent 0.00 after 54 s on `fixed_3`. The learner
+sometimes overfits (e.g. an option pattern pinned to the demo's option name);
+the verify step and a regex check catch this and relearn.
+
 ## Run 2: official small setup with real Lucene search (n = 10)
 
 WebShop's own `-d small` configuration: 1,000 products, the official

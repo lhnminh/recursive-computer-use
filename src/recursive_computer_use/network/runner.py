@@ -55,6 +55,7 @@ def run_recipe(
     session_cookies: Mapping[str, str] | None = None,
     chooser: Chooser | None = None,
     task: str = "",
+    on_step: Callable[[StepResult, dict[str, Any]], None] | None = None,
 ) -> RunResult:
     """Run a recipe and report per-step timings and the verifier's verdict.
 
@@ -66,6 +67,9 @@ def run_recipe(
     ``step.choose`` picks values from a step's HTML response. *chooser*
     decides (usually one small model call that sees *task*); without one the
     first candidate wins. See :data:`Chooser`.
+
+    *on_step* is called after each step with its result and the vars that
+    step chose (not extracted tokens), e.g. to show progress live.
 
     Errors are returned without response bodies or request headers, which can
     contain task data or session material.
@@ -107,6 +111,8 @@ def run_recipe(
                 )
             for choose in step.choose:
                 values[choose.var] = _choose(choose, body_bytes, chooser, task)
+            if on_step is not None:
+                on_step(result.steps[-1], {c.var: values[c.var] for c in step.choose})
 
         result.vars = values
         if recipe.verify:
@@ -159,18 +165,22 @@ def candidates_for(choose: Choose, html: str) -> list[dict[str, Any]]:
     if choose.mode == "per_name":
         groups: dict[str, list[str]] = {}
         for m in re.finditer(choose.regex, html):
-            values = groups.setdefault(m.group(1), [])
-            if m.group(2) not in values:
-                values.append(m.group(2))
+            name, value = html_unescape(m.group(1)), html_unescape(m.group(2))
+            values = groups.setdefault(name, [])
+            if value not in values:
+                values.append(value)
         return [{"name": n, "values": v} for n, v in list(groups.items())[: choose.max]]
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
     for m in re.finditer(choose.regex, html):
-        value = m.group(1)
+        value = html_unescape(m.group(1))  # values come from HTML attributes
         if value in seen:
             continue
         seen.add(value)
-        window = html[m.end() : m.end() + choose.context * 6]
+        start = m.end()
+        tag_end = html.find(">", start, start + 400)  # skip the rest of the tag the match sits in
+        start = tag_end + 1 if tag_end != -1 else start
+        window = html[start : start + choose.context * 6]
         text = _SPACE_RE.sub(" ", html_unescape(_TAG_RE.sub(" ", window))).strip()
         out.append({"value": value, "context": text[: choose.context]})
         if len(out) >= choose.max:

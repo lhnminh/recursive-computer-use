@@ -99,9 +99,10 @@ def render_url(template: str, values: Mapping[str, Any]) -> str:
     """Like :func:`render`, but percent-encodes each substituted value.
 
     A search text or a JSON options object may hold spaces, quotes or
-    slashes that would break a URL path.
+    braces that would break a URL. ``/`` is kept, so a chosen path stays a
+    path.
     """
-    return _VAR_RE.sub(lambda m: quote(str(_lookup(values, m.group(1))), safe=""), template)
+    return _VAR_RE.sub(lambda m: quote(str(_lookup(values, m.group(1))), safe="/"), template)
 
 
 def resolve_session_vars(recipe: "Recipe", cookies: Mapping[str, str]) -> dict[str, str]:

@@ -68,8 +68,12 @@ Rules:
   Add to that earlier step "choose": [{"var", "regex", "mode"}]:
   - mode "one": regex with ONE capture group that matches each candidate
     value in the raw HTML, e.g. in result links "item/([A-Z0-9]+)/".
+    Capture the smallest identifier (an id), never a whole URL or path,
+    and reuse it where the recording used that id.
   - mode "per_name": regex with TWO capture groups (option name, option
-    value), e.g. for radio inputs 'name="([^"]+)" value="([^"]+)"'. The var
+    value), e.g. for radio inputs 'name="([^"]+)" value="([^"]+)"'. Both
+    groups must match ANY name and value: other products have other option
+    names (size, color, flavor), so never write a recorded name literally. The var
     holds a JSON object {name: value} of the chosen options; use {{var}}
     where the recording sent the chosen options (an empty choice is {}).
   A model later picks among the candidates using the task text.
@@ -78,8 +82,11 @@ Rules:
   site; otherwise null.
 
 Reply with one JSON object and nothing else:
-{"name": str, "description": str (one sentence: what the task does and its
-inputs), "params": [{"name", "description", "example"}], "steps": [{"id",
+{"name": str (short, for the general kind of task, e.g. "search-and-buy"),
+"description": str (one sentence on the general kind of task and its inputs,
+valid for ANY param values, e.g. "Search the store and buy a product that
+matches a request, choosing its options"; never mention the example's
+values), "params": [{"name", "description", "example"}], "steps": [{"id",
 "method", "url", "headers", "body", "body_format", "expect_status",
 "extract": [{"var", "from", "path"}], "choose": [{"var", "regex", "mode"}]}],
 "verify": {"url"} | null}
@@ -269,6 +276,13 @@ def _to_recipe(reply: str, *, site: str, task_key: str, name: str | None) -> Rec
         if isinstance(param, dict) and _PLACEHOLDER.search(str(param.get("example") or "")):
             param["example"] = None  # never store a redacted value as an example
     recipe = Recipe.from_dict(data)
+    for step in recipe.steps:
+        for ch in step.choose:
+            if ch.mode == "per_name" and not _is_open_group(ch.regex, 1):
+                raise RecipeError(
+                    f"choose {ch.var!r}: the option-name group {ch.regex!r} matches one fixed name; "
+                    "it must match any option name, e.g. name=\"([^\"]+)\""
+                )
     leaked = _PLACEHOLDER.findall(json.dumps([s.to_dict() for s in recipe.steps]))
     if leaked:
         raise RecipeError(
@@ -276,6 +290,26 @@ def _to_recipe(reply: str, *, site: str, task_key: str, name: str | None) -> Rec
             "earlier response or make them params"
         )
     return recipe.validate()
+
+
+def _is_open_group(regex: str, group: int) -> bool:
+    """True if capture *group* of *regex* can match more than one literal string."""
+    import re._parser as sre_parse  # stdlib parser; stable enough for a sanity check
+
+    def walk(items: Any) -> bool | None:
+        for op, av in items:
+            if op is sre_parse.SUBPATTERN:
+                if av[0] == group:
+                    return any(o is not sre_parse.LITERAL for o, _ in av[-1])
+                found = walk(av[-1])
+                if found is not None:
+                    return found
+        return None
+
+    try:
+        return bool(walk(sre_parse.parse(regex)))
+    except Exception:  # noqa: BLE001 - validate() reports bad regexes
+        return True
 
 
 def _slug(text: str) -> str:

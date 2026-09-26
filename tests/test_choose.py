@@ -110,7 +110,7 @@ class ChooseTests(unittest.TestCase):
             Recipe.from_dict(bad).validate()
 
     def test_render_url_encodes_values(self):
-        self.assertEqual(render_url("http://h/s/{{q}}", {"q": "a b/c"}), "http://h/s/a%20b%2Fc")
+        self.assertEqual(render_url("http://h/s/{{q}}", {"q": 'a b/c"{}'}), "http://h/s/a%20b/c%22%7B%7D")
 
 
 if __name__ == "__main__":
