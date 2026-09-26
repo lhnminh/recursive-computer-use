@@ -1,0 +1,17 @@
+[project]
+name = "recursive-computer-use"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Minh Le", email = "lehnminh@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+recursive-computer-use = "recursive_computer_use:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
