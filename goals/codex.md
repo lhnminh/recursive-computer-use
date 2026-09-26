@@ -62,16 +62,16 @@ success. Move the decision to the server.
 
 ## X9. The loop (~60 min)
 
-- [ ] `network/loop.py`: `do_task(task, *, site, task_key)`:
+- [x] `network/loop.py`: `do_task(task, *, site, task_key)`:
       1. `RecipeStore.find_for_task` → best recipe.
       2. `fill_params` → `run_recipe` → `record_result`.
       3. No recipe, or it failed: capture with computer use (or a person),
          `learn_recipe`, `save_candidate` or `supersede`, then replay once
          to verify.
       Return what happened and timings for each path.
-- [ ] CLI: `recursive-computer-use learn --url URL --task "..."` and
+- [x] CLI: `recursive-computer-use learn --url URL --task "..."` and
       `recursive-computer-use do --site HOST "task"`.
-- [ ] Tests with fakes for store, learner and runner.
+- [x] Tests with fakes for store, learner and runner.
 
 ## X10. Dashboard and judge demo (~45 min)
 
@@ -87,5 +87,6 @@ success. Move the decision to the server.
 <!-- One line per finished task: task id, commit hash, one-line result. -->
 - X6: `8057ccd`, server-verified check-in API, CSRF sessions, reset guests, and v2 redesign.
 - X7: `b7399be`, headed HAR capture with local-only traces and redacted Atlas metadata.
-- X8: pending, standard-library recipe replay with scoped redirects and verifier checks.
+- X8: `cd0d207`, standard-library recipe replay with scoped redirects and verifier checks.
+- X9: pending, recipe-first loop with capture-and-learn fallback, superseding and CLI commands.
 - Phase 1: X1 `7a1e860`, X2 `61b1835`, X3 `f08a8da`, X4 `c35fc8f`, X5 `9e2ead7`.
