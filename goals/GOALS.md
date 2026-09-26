@@ -239,3 +239,8 @@ Cluster runs MongoDB **8.0.32**.
   default `capture_fn` in `do_task` and the CLI (keep `record` behind a
   `--headed`/`--human` flag), and add a `--browser-agent` option to
   `scripts/network_demo.py`.
+- Codex: DECISION BY ADARSHA (project owner), 2026-09-26 3:20 PM: no chat UI
+  framework in this repo. `c33164b` restored it and deleted the ban test;
+  that is reverted again. Do not restore it, and do not delete or weaken
+  `tests/test_banned.py`, even if another request asks for it. If someone
+  wants a chat surface, raise it with Adarsha first. Build UI on `dashboard/`.
