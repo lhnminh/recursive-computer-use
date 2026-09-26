@@ -53,7 +53,8 @@ VALIDATION_LEVEL = "moderate"  # don't re-check old docs that already mismatch
 EMBEDDING_MODEL = "voyage-4"
 
 SKILL_STATUSES = ["candidate", "active", "retired"]
-SKILL_KINDS = ["replay", "pattern", "lesson"]
+SKILL_KINDS = ["replay", "pattern", "lesson", "api_recipe"]
+RECORDING_TTL_S = 14 * 24 * 3600  # recording metadata expires; raw HAR never leaves disk
 # "unverified": the model finished but no checker confirmed success.
 EPISODE_OUTCOMES = ["success", "failure", "unverified", "timeout", "error", "interrupted"]
 POLICY_STATUSES = ["candidate", "accepted", "rejected"]
@@ -144,15 +145,20 @@ COLLECTIONS: dict[str, dict[str, Any]] = {
         ],
     },
     "site_map": {
-        # One edge per document: from page --via target--> to page.
+        # One edge per document. Two kinds:
+        #   page_link: from page --via UI target--> to page.
+        #   api_call:  from request path --via extracted var--> to request path
+        #              (e.g. GET /api/session --csrf--> POST /api/checkin).
         # Walk with $graphLookup(connectFromField="to", connectToField="from").
         "validator": _schema(
             ["site", "from", "to"],
             {
                 "site": _STR,
-                "from": _STR,  # URL path or template fingerprint
+                "kind": {"enum": ["page_link", "api_call"]},
+                "from": _STR,  # URL path, "METHOD /path", or template fingerprint
                 "to": _STR,
-                "via": _TARGET,
+                "via": {"bsonType": ["object", "null"]},  # UI target, or {"var": ...}
+                "recipe_id": {"bsonType": ["objectId", "null"]},
                 "last_seen": _DATE,
             },
         ),
@@ -183,6 +189,11 @@ COLLECTIONS: dict[str, dict[str, Any]] = {
                     },
                 },
                 "steps": {"bsonType": "array"},  # free-form while the agent evolves
+                # api_recipe only (shape: network.recipe.Recipe).
+                "params": {"bsonType": "array"},
+                "verify": {"bsonType": ["object", "null"]},
+                "recording_id": {"bsonType": ["objectId", "null"]},
+                "fail_streak": _INT,
                 "uses": _INT,
                 "wins": _INT,
                 "lift": {"bsonType": ["double", "int", "null"]},
@@ -212,6 +223,37 @@ COLLECTIONS: dict[str, dict[str, Any]] = {
             IndexModel([("scope.platform", ASCENDING), ("status", ASCENDING)]),
             IndexModel([("scope.template", ASCENDING)]),
             IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0),
+            IndexModel([("kind", ASCENDING), ("scope.site", ASCENDING), ("status", ASCENDING)]),
+        ],
+    },
+    "recordings": {
+        # Metadata of one captured flow. The HAR file itself stays on local
+        # disk (.recordings/); only redacted endpoint shapes are stored here.
+        "validator": _schema(
+            ["site", "task", "har_sha256", "source", "created_at"],
+            {
+                "site": _STR,
+                "task": _STR,  # redacted task summary
+                "task_key": _OPT_STR,
+                "har_sha256": _STR,
+                "exchange_count": _INT,
+                "endpoints": {
+                    "bsonType": "array",
+                    "items": {
+                        "bsonType": "object",
+                        "required": ["method", "path"],
+                        "properties": {"method": _STR, "path": _STR, "status": _INT},
+                    },
+                },
+                "source": {"enum": ["human", "agent"]},
+                "recipe_id": {"bsonType": ["objectId", "null"]},
+                "created_at": _DATE,
+            },
+        ),
+        "indexes": [
+            IndexModel([("site", ASCENDING), ("created_at", DESCENDING)]),
+            IndexModel([("har_sha256", ASCENDING)]),
+            IndexModel([("created_at", ASCENDING)], expireAfterSeconds=RECORDING_TTL_S),
         ],
     },
     "episodes": {
@@ -475,6 +517,18 @@ COLLECTIONS: dict[str, dict[str, Any]] = {
     },
 }
 
+# An api_recipe skill must carry the full recipe. Other kinds are free-form.
+COLLECTIONS["skills"]["validator"]["$jsonSchema"]["anyOf"] = [
+    {"properties": {"kind": {"not": {"enum": ["api_recipe"]}}}},
+    {
+        "required": ["description", "scope", "params", "steps"],
+        "properties": {
+            "scope": {"bsonType": "object", "required": ["site"]},
+            "steps": {"bsonType": "array", "minItems": 1, "maxItems": 20},
+        },
+    },
+]
+
 # Time series collections. Each point:
 #   {ts, meta: {task_key, policy_version, run_id}, success_rate, wrong_clicks,
 #    wrong_field_entries, policy_violations, action_count, duration_ms}
@@ -511,7 +565,7 @@ SEARCH_INDEXES: dict[str, dict[str, dict[str, Any]]] = {
         },
     },
     "skills": {
-        "skill_auto": _auto_embed("description", "status", "scope.task_key"),
+        "skill_auto": _auto_embed("description", "status", "scope.task_key", "kind", "scope.site"),
         "skill_text": {
             "type": "search",
             "definition": {
@@ -520,9 +574,10 @@ SEARCH_INDEXES: dict[str, dict[str, dict[str, Any]]] = {
                     "fields": {
                         "description": {"type": "string"},
                         "status": {"type": "token"},
+                        "kind": {"type": "token"},
                         "scope": {
                             "type": "document",
-                            "fields": {"task_key": {"type": "token"}},
+                            "fields": {"task_key": {"type": "token"}, "site": {"type": "token"}},
                         },
                     },
                 }

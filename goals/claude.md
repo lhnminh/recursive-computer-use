@@ -21,16 +21,17 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 - [x] `render(template, values)` helper for `{{var}}`: shared by the runner.
 - [x] Unit tests with fakes. Push, then tick the box so Codex knows.
 
-## N2. Schema for recipes and recordings (~20 min)
+## N2. Schema for recipes and recordings — done
 
-- [ ] `skills` validator accepts `kind: "api_recipe"` with `params`,
+- [x] `skills` validator accepts `kind: "api_recipe"` with `params`,
       `steps`, `verify`. Keep other kinds valid.
-- [ ] New `recordings` collection: metadata only. `{site, task, task_key,
+- [x] New `recordings` collection: metadata only. `{site, task, task_key,
       har_sha256, exchange_count, endpoints: [{method, path, status}],
       source: "human" | "agent", created_at}`. TTL 14 days.
-- [ ] `site_map` edges from recipes: `from` step path → `to` step path,
+- [x] `site_map` accepts `kind: "api_call"` edges with `recipe_id` (writing them is in N5). Edges from recipes: `from` step path → `to` step path,
       `via` the extracted var. `$graphLookup` shows the call chain.
-- [ ] Run `schema.py` against Atlas.
+- [x] Run `schema.py` against Atlas.
+- [x] Search filters: `skill_auto` and `skill_text` now also filter on `kind` and `scope.site`.
 
 ## N3. HAR reader and redaction (~45 min)
 
@@ -62,6 +63,8 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 
 ## N5. Recipe store (~60 min)
 
+- [ ] Write `site_map` `api_call` edges when a recipe is saved.
+
 - [ ] `recipes.py`: `RecipeStore(db)` per the contract in `GOALS.md`.
 - [ ] `find_for_task`: `$rankFusion` over Voyage on `description`, keyword
       on `description`, and positive `lift`, filtered to
@@ -84,3 +87,4 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 <!-- One line per finished task: task id, commit hash, one-line result. -->
 - Phase 1: C1, C2, C2b (`5514ede`), C3 (`87d6d57`).
 - N1: `network/recipe.py` — `Recipe`, `render`, `template_vars`, `validate()`; 13 tests.
+- N2: `schema.py` — `api_recipe` skills, `recordings` (TTL 14 d), `api_call` edges; applied to Atlas.
