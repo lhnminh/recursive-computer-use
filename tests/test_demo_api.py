@@ -9,6 +9,8 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 
 from demo import app
+from recursive_computer_use.network.recipe import Recipe
+from recursive_computer_use.network.runner import run_recipe
 
 
 class DemoApiTests(unittest.TestCase):
@@ -121,6 +123,61 @@ class DemoApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         result = json.loads(self.request("/api/result")[1])
         self.assertFalse(result["success"])
+
+    def test_recipe_runner_survives_reset_and_detects_then_heals_redesign(self):
+        site = self.base_url.split("//", 1)[1]
+
+        def make_recipe(version_two=False):
+            submit_url = "/api/v2/check-in" if version_two else "/api/checkin"
+            body = (
+                {"name": "{{full_name}}", "email": "{{email}}", "city": "{{city}}"}
+                if version_two
+                else {"full_name": "{{full_name}}", "email": "{{email}}", "city": "{{city}}"}
+            )
+            return Recipe.from_dict({
+                "name": "local:checkin",
+                "description": "Check in a guest with name, email and city.",
+                "scope": {"site": site, "task_key": "local-checkin"},
+                "params": [
+                    {"name": "full_name", "description": "Guest full name"},
+                    {"name": "email", "description": "Guest email"},
+                    {"name": "city", "description": "Guest city"},
+                ],
+                "steps": [
+                    {
+                        "id": "session", "method": "GET", "url": f"{self.base_url}/api/session",
+                        "headers": {}, "body": None, "expect_status": 200,
+                        "extract": [{"var": "csrf", "from": "json", "path": "csrf"}],
+                    },
+                    {
+                        "id": "checkin", "method": "POST", "url": f"{self.base_url}{submit_url}",
+                        "headers": {"X-CSRF-Token": "{{csrf}}", "Content-Type": "application/json"},
+                        "body": body, "expect_status": 200, "extract": [],
+                    },
+                ],
+                "verify": {"url": f"{self.base_url}/api/result"},
+            })
+
+        ada = {"full_name": "Ada Lovelace", "email": "ada@example.com", "city": "New York"}
+        self.request("/api/reset", method="POST", payload={"guest": ada})
+        v1 = make_recipe()
+        first = run_recipe(v1, ada)
+        self.assertTrue(first.ok, first.error)
+
+        grace = {"full_name": "Grace Hopper", "email": "grace@example.net", "city": "Arlington"}
+        self.request("/api/reset", method="POST", payload={"guest": grace})
+        second = run_recipe(v1, grace)
+        self.assertTrue(second.ok, second.error)
+
+        self.request("/api/redesign", method="POST", payload={"on": True})
+        self.request("/api/reset", method="POST", payload={"guest": grace})
+        failed = run_recipe(v1, grace)
+        self.assertFalse(failed.ok)
+        self.assertIn("410", failed.error)
+
+        v2 = make_recipe(version_two=True)
+        healed = run_recipe(v2, grace)
+        self.assertTrue(healed.ok, healed.error)
 
 
 if __name__ == "__main__":
