@@ -247,15 +247,22 @@ def _actions(page: Any) -> list[dict[str, Any]]:
     acts: list[dict[str, Any]] = []
     on_product = page.locator("[data-test=add-to-cart]").count() > 0
     if on_product:
-        name = page.locator("[data-test=product-name]").first.inner_text() if page.locator("[data-test=product-name]").count() else "this product"
-        price = page.locator("[data-test=unit-price]").first.inner_text() if page.locator("[data-test=unit-price]").count() else ""
+        name, price = "this product", ""
+        try:  # the page can re-render under us; never hang on a label
+            name = page.locator("[data-test=product-name]").first.inner_text(timeout=3000)
+            price = page.locator("[data-test=unit-price]").first.inner_text(timeout=3000)
+        except Exception:  # noqa: BLE001
+            pass
         acts.append({"label": f"Add this product to cart: {name} ${price}".strip(), "loc": ("[data-test=add-to-cart]", 0)})
     if not on_product and page.locator("[data-test=sort]").count():
         acts.append({"label": "sort results: Price (Low - High)", "loc": ("sort", "price,asc")})
     cards = page.locator("a.card")
     kind = "open related product" if on_product else "open product"
     for i in range(min(cards.count(), 12)):
-        text = re.sub(r"\s+", " ", cards.nth(i).inner_text()).strip()
+        try:
+            text = re.sub(r"\s+", " ", cards.nth(i).inner_text(timeout=3000)).strip()
+        except Exception:  # noqa: BLE001
+            continue
         text = re.sub(r"\b[A-E](?: [A-E]){4}\b", "", text).replace("More information", "").strip()
         acts.append({"label": f"{kind}: {text[:80]}", "loc": ("a.card", i)})
     pages = page.locator("ul.pagination a.page-link")
@@ -280,7 +287,7 @@ def browse_visible(page: Any, item: str, client: Any, on_event: Event | None,
             banner(page, f"Browsing agent · no memory · {calls} model calls · {time.time() - t:.0f}s", "#6e40c9")
             acts = _actions(page)
             prompt = {"instruction": task, "history": history[-6:],
-                      "page": re.sub(r"\s+", " ", page.inner_text("body"))[:3500],
+                      "page": re.sub(r"\s+", " ", page.inner_text("body", timeout=5000))[:3500],
                       "actions": "\n".join(f"{i}: {a['label']}" for i, a in enumerate(acts)),
                       "can_search": page.locator("[data-test=search-query]").count() > 0}
             reply = _complete(client, DEFAULT_MODEL, [
