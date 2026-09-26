@@ -111,7 +111,6 @@ class LearningStore:
                                 "uses": 0,
                                 "wins": 0,
                                 "lift": None,
-                                "protected": rule in protected,
                                 "retirement_candidate": False,
                                 "created_at": now,
                             },
