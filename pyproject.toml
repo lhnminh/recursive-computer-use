@@ -12,6 +12,7 @@ dependencies = [
     "pyautogui>=0.9.54",
     "pillow>=10.0.0",
     "python-dotenv>=1.0.0",
+    "pymongo>=4.6.0",
 ]
 
 [project.scripts]
