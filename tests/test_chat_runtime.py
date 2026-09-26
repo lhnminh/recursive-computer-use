@@ -11,16 +11,8 @@ from recursive_computer_use.chat_runtime import (
 
 
 class ChatRuntimeTests(unittest.TestCase):
-    def test_prompt_adds_review_boundary_by_default(self):
-        prompt = build_agent_prompt("Draft an email", stop_before_irreversible=True)
-        self.assertIn("Draft an email", prompt)
-        self.assertIn("do not submit, publish, send", prompt)
-
-    def test_prompt_can_explicitly_allow_requested_final_action(self):
-        self.assertEqual(
-            build_agent_prompt("Send the email", stop_before_irreversible=False),
-            "Send the email",
-        )
+    def test_prompt_is_passed_through_without_ui_instructions(self):
+        self.assertEqual(build_agent_prompt("Draft an email"), "Draft an email")
 
     def test_task_key_is_bounded_and_normalized(self):
         self.assertEqual(normalize_task_key("  Job Applications / Workday  "), "job-applications-workday")

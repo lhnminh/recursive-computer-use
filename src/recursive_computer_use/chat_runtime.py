@@ -11,14 +11,6 @@ from urllib.parse import urlparse
 DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_TASK_KEY = "web-desktop"
 
-_REVIEW_GUARDRAIL = """
-Safety requirement from the user interface: you may navigate, inspect, and
-prepare the requested work, but do not submit, publish, send, purchase, delete,
-confirm, or perform another irreversible external action. Stop immediately
-before the final irreversible action and tell the user what remains.
-""".strip()
-
-
 @dataclass(frozen=True)
 class ChatOptions:
     """Options passed from the local chat surface into ``agent.run``."""
@@ -29,7 +21,6 @@ class ChatOptions:
     log_actions: bool = True
     evolve: bool = True
     verbose: bool = False
-    stop_before_irreversible: bool = True
 
 
 def normalize_task_key(value: str) -> str:
@@ -55,14 +46,11 @@ def validate_verifier_url(value: str | None) -> str | None:
     return url
 
 
-def build_agent_prompt(prompt: str, *, stop_before_irreversible: bool) -> str:
-    """Add the UI's review boundary without changing the user's visible text."""
-
+def build_agent_prompt(prompt: str) -> str:
+    """Validate and return the user's prompt unchanged."""
     cleaned = prompt.strip()
     if not cleaned:
         raise ValueError("Enter a task before starting computer control.")
-    if stop_before_irreversible:
-        return f"{cleaned}\n\n{_REVIEW_GUARDRAIL}"
     return cleaned
 
 
@@ -77,10 +65,7 @@ def execute_task(
     if runner is None:
         from .agent import run as runner
 
-    runtime_prompt = build_agent_prompt(
-        prompt,
-        stop_before_irreversible=options.stop_before_irreversible,
-    )
+    runtime_prompt = build_agent_prompt(prompt)
     verifier_url = validate_verifier_url(options.verifier_url)
     return runner(
         runtime_prompt,

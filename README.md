@@ -217,10 +217,13 @@ Alternatively:
 python -m recursive_computer_use.webui
 ```
 
-Open `http://127.0.0.1:8600`, enable **Arm computer control**, and enter a task
-in the chat box. Each submitted message starts one bounded run through the same
-policy-enforced `agent.run` path used by the CLI. Set `RCU_WEB_HOST` or
-`RCU_WEB_PORT` to override the bind address or port.
+Open `http://127.0.0.1:8600`, choose a demo task or describe one, then enable
+**Arm desktop** and run it. Each submitted task starts one bounded run through
+the same `agent.run` path used by the CLI. Set `RCU_WEB_HOST` or `RCU_WEB_PORT`
+to override the bind address or port.
+
+For the local computer-use demo, start `python -m demo.app` in another
+terminal. The conference check-in page is at `http://127.0.0.1:8765/`.
 
 The chat surface:
 

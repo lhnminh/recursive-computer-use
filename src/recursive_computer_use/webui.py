@@ -57,92 +57,61 @@ PAGE = """<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Recursive Computer Use</title>
+<title>Self Improving Computer Use</title>
 <style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    margin: 0; background: #0f1115; color: #e6e6e6;
-    display: flex; justify-content: center;
-  }
-  main { width: 100%; max-width: 720px; padding: 24px 16px 120px; }
-  h1 { font-size: 1.4rem; margin: 0 0 4px; }
-  .caption { color: #9aa0a6; font-size: 0.85rem; margin: 0 0 16px; }
-  .controls {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px;
-    background: #171a21; border: 1px solid #262b35; border-radius: 10px;
-    padding: 12px; margin-bottom: 16px;
-  }
-  .controls label { font-size: 0.75rem; color: #9aa0a6; display: block; margin-bottom: 2px; }
-  .controls input[type=text] {
-    width: 100%; padding: 6px 8px; border-radius: 6px;
-    border: 1px solid #2c313c; background: #0f1115; color: #e6e6e6; font-size: 0.85rem;
-  }
-  .toggles { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 14px; }
-  .toggles label { display: flex; align-items: center; gap: 6px; color: #cfd3d8; font-size: 0.8rem; }
-  #log { display: flex; flex-direction: column; gap: 10px; }
-  .msg { padding: 10px 12px; border-radius: 10px; white-space: pre-wrap; line-height: 1.4; font-size: 0.92rem; }
-  .msg.user { background: #1f6feb; color: #fff; align-self: flex-end; max-width: 85%; }
-  .msg.assistant { background: #171a21; border: 1px solid #262b35; align-self: flex-start; max-width: 95%; }
-  .msg.error { background: #3d1418; border: 1px solid #7d2530; color: #ffb3ba; align-self: flex-start; max-width: 95%; }
-  .msg.status { background: transparent; color: #9aa0a6; font-size: 0.8rem; align-self: center; }
-  .composer {
-    position: fixed; bottom: 0; left: 0; right: 0; display: flex; justify-content: center;
-    background: linear-gradient(transparent, #0f1115 30%); padding: 16px;
-  }
-  .composer-inner { width: 100%; max-width: 720px; display: flex; gap: 8px; }
-  #prompt {
-    flex: 1; padding: 12px; border-radius: 10px; border: 1px solid #2c313c;
-    background: #171a21; color: #e6e6e6; font-size: 0.95rem; resize: none;
-  }
-  #prompt:disabled { opacity: 0.5; }
-  button.send {
-    padding: 0 18px; border: none; border-radius: 10px; background: #1f6feb;
-    color: #fff; font-size: 0.95rem; cursor: pointer;
-  }
-  button.send:disabled { opacity: 0.5; cursor: not-allowed; }
-  .warn { color: #f0b429; font-size: 0.8rem; margin-top: 6px; }
+  :root { color-scheme: dark; --ink:#f4f1e9; --muted:#a9aaa5; --line:#343832; --panel:#171a16; --lime:#c8ef74; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; background:#10120f; color:var(--ink); font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  main { width:min(100%,960px); margin:auto; padding:30px 28px 150px; }
+  header { display:flex; justify-content:space-between; align-items:center; margin-bottom:76px; }
+  .brand { display:flex; align-items:center; gap:11px; font-size:14px; font-weight:650; letter-spacing:.01em; }
+  .brand-mark { display:grid; place-items:center; width:30px; height:30px; color:#15180f; background:var(--lime); border-radius:9px; font-size:17px; }
+  .local-pill { display:flex; align-items:center; gap:8px; color:#c2c5bc; font-size:12px; border:1px solid var(--line); border-radius:999px; padding:8px 12px; }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--lime); box-shadow:0 0 12px #c8ef7480; }
+  .eyebrow { color:var(--lime); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; }
+  h1 { max-width:680px; margin:14px 0 14px; font-size:clamp(42px,7vw,68px); line-height:.99; letter-spacing:-.055em; font-weight:570; }
+  .intro { max-width:560px; margin:0; color:var(--muted); font-size:16px; line-height:1.6; }
+  .workbench { margin-top:36px; padding:22px; border:1px solid var(--line); border-radius:16px; background:#151713; }
+  .workbench-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; }
+  .workbench-title { display:flex; align-items:center; gap:9px; font-size:13px; font-weight:600; }
+  .arm { display:flex; align-items:center; gap:8px; color:#b9bdb3; font-size:12px; cursor:pointer; }
+  .arm input { accent-color:var(--lime); width:15px; height:15px; }
+  #log { display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:88%; padding:11px 14px; border-radius:12px; white-space:pre-wrap; line-height:1.5; font-size:13px; }
+  .msg.user { color:#15180f; background:var(--lime); align-self:flex-end; }
+  .msg.assistant { color:#e4e5de; background:#20231e; border:1px solid #30342d; align-self:flex-start; }
+  .msg.error { color:#ffc0b9; background:#321d1a; border:1px solid #68403a; align-self:flex-start; }
+  .msg.status { max-width:none; color:#abb09f; font-size:12px; align-self:center; }
+  .composer { display:flex; gap:10px; margin-top:16px; }
+  #prompt { flex:1; min-height:52px; max-height:130px; padding:15px; resize:vertical; color:var(--ink); background:#10120f; border:1px solid #3b4037; border-radius:11px; font:inherit; font-size:13px; outline:none; }
+  #prompt:focus { border-color:#8ba950; box-shadow:0 0 0 3px #c8ef741c; }
+  #prompt:disabled { opacity:.45; }
+  button.send { padding:0 20px; border:0; border-radius:11px; background:var(--lime); color:#171a12; font-weight:700; cursor:pointer; }
+  button.send:disabled { opacity:.4; cursor:not-allowed; }
+  .footnote { margin:13px 0 0; color:#858a80; font-size:11px; line-height:1.5; }
+  @media(max-width:620px) { main{padding:20px 16px 130px} header{margin-bottom:54px}.workbench{padding:16px}.footnote{max-width:330px} }
 </style>
 </head>
 <body>
 <main>
-  <h1>Recursive Computer Use</h1>
-  <p class="caption">Local chat for the policy-enforced desktop agent. Submitting a task can move your mouse and type on your keyboard.</p>
+  <header>
+    <div class="brand"><span class="brand-mark">↗</span> Self Improving Computer Use</div>
+    <div class="local-pill"><i class="dot"></i> Running locally</div>
+  </header>
+  <div class="eyebrow">A desktop agent you can watch</div>
+  <h1>Give your computer<br>something to do.</h1>
+  <p class="intro">The agent sees the screen, uses the mouse and keyboard, and works through the task in front of you.</p>
 
-  <div class="controls">
-    <div>
-      <label for="model">Model</label>
-      <input id="model" type="text" value="__MODEL__" />
+  <section class="workbench">
+    <div class="workbench-top">
+      <div class="workbench-title"><i class="dot"></i> Computer-use session</div>
+      <label class="arm"><input id="armed" type="checkbox" /> Arm desktop</label>
     </div>
-    <div>
-      <label for="taskKey">Task family</label>
-      <input id="taskKey" type="text" value="__TASK_KEY__" />
-    </div>
-    <div style="grid-column: 1 / -1;">
-      <label for="verifier">Local verifier URL (optional)</label>
-      <input id="verifier" type="text" placeholder="http://127.0.0.1:8765/api/result" />
-    </div>
-    <div class="toggles">
-      <label><input id="armed" type="checkbox" /> Arm computer control</label>
-      <label><input id="stopIrreversible" type="checkbox" checked /> Stop before irreversible actions</label>
-      <label><input id="logActions" type="checkbox" __MONGO_CHECKED__ /> MongoDB telemetry</label>
-      <label><input id="evolve" type="checkbox" __MONGO_CHECKED__ /> Self-improvement</label>
-    </div>
-  </div>
-  <p id="mongoNote" class="caption">__MONGO_NOTE__</p>
-
-  <div id="log">
-    <div class="msg assistant">Tell me what to do on this computer. I will inspect the screen, operate the local mouse and keyboard, and report the result.</div>
-  </div>
+    <div id="log"><div class="msg assistant">Your session is ready. Arm the desktop and describe a task to begin.</div></div>
+    <div class="composer"><textarea id="prompt" rows="1" placeholder="Arm desktop to describe a task…" disabled></textarea><button class="send" id="send" disabled>Run task ↗</button></div>
+  </section>
+  <p class="footnote">Arming enables real mouse and keyboard control. Keep the desktop visible and move the pointer to a screen corner to stop the agent.</p>
 </main>
-
-<div class="composer">
-  <div class="composer-inner">
-    <textarea id="prompt" rows="1" placeholder="Arm computer control, then tell the agent what to do" disabled></textarea>
-    <button class="send" id="send" disabled>Send</button>
-  </div>
-</div>
 
 <script>
   const log = document.getElementById("log");
@@ -181,12 +150,6 @@ PAGE = """<!doctype html>
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt,
-          model: document.getElementById("model").value,
-          task_key: document.getElementById("taskKey").value,
-          verifier_url: document.getElementById("verifier").value,
-          stop_before_irreversible: document.getElementById("stopIrreversible").checked,
-          log_actions: document.getElementById("logActions").checked,
-          evolve: document.getElementById("evolve").checked,
         }),
       });
       const data = await resp.json();
@@ -215,18 +178,7 @@ PAGE = """<!doctype html>
 
 
 def _render_page() -> str:
-    mongo_configured = bool(os.environ.get("MONGODB_URI", "").strip())
-    note = (
-        "MongoDB configured through .env."
-        if mongo_configured
-        else "MongoDB is not configured. Tasks can still run without learning."
-    )
-    return (
-        PAGE.replace("__MODEL__", os.environ.get("RCU_MODEL", DEFAULT_MODEL))
-        .replace("__TASK_KEY__", DEFAULT_TASK_KEY)
-        .replace("__MONGO_CHECKED__", "checked" if mongo_configured else "")
-        .replace("__MONGO_NOTE__", note)
-    )
+    return PAGE
 
 
 def _run_task(payload: dict[str, Any]) -> dict[str, Any]:
@@ -249,7 +201,6 @@ def _run_task(payload: dict[str, Any]) -> dict[str, Any]:
             log_actions=bool(payload.get("log_actions", False)),
             evolve=bool(payload.get("evolve", False)),
             verbose=False,
-            stop_before_irreversible=bool(payload.get("stop_before_irreversible", True)),
         )
         answer = execute_task(prompt, options).strip()
         return {"ok": True, "answer": answer or "The agent finished without a text response."}
