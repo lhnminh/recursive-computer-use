@@ -34,6 +34,23 @@ def _pil_to_base64(image: Any) -> str:
     return f"data:image/png;base64,{b64}"
 
 
+def _to_logical_size(image: Any, pyautogui_module: Any) -> Any:
+    """Shrink a HiDPI screenshot to the logical screen size.
+
+    On Retina displays a screenshot has 2x the pixels of the coordinate space
+    that ``pyautogui`` clicks in. Without this, every coordinate the model
+    reads off the image lands at twice the intended position.
+    """
+    try:
+        screen_w, screen_h = pyautogui_module.size()
+        img_w, img_h = image.size
+    except Exception:
+        return image
+    if img_w <= screen_w and img_h <= screen_h:
+        return image
+    return image.resize((int(screen_w), int(screen_h)))
+
+
 _RECORDED_ACTIONS = frozenset(
     {
         "click",
@@ -440,6 +457,7 @@ class Sandbox:
             print(value)
 
         def _display(image: Any) -> None:
+            image = _to_logical_size(image, pyautogui_module)
             sandbox_self._images.append(_pil_to_base64(image))
 
         self._ns["log"] = _log

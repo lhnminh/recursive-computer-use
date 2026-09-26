@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from recursive_computer_use.sandbox import RecordingPyAutoGUI, Sandbox
+from PIL import Image
+
+from recursive_computer_use.sandbox import RecordingPyAutoGUI, Sandbox, _to_logical_size
 
 
 class FakePyAutoGUI:
@@ -142,6 +144,18 @@ class RecordingTests(unittest.TestCase):
             with self.subTest(code=code):
                 result = sandbox.run(code)
                 self.assertIn("PolicyViolationError", result["error"] or "")
+
+    def test_retina_screenshot_scales_to_click_coordinates(self):
+        class RetinaScreen:
+            def size(self):
+                return (1512, 982)
+
+        retina = Image.new("RGB", (3024, 1964))
+        self.assertEqual(_to_logical_size(retina, RetinaScreen()).size, (1512, 982))
+        normal = Image.new("RGB", (1512, 982))
+        self.assertIs(_to_logical_size(normal, RetinaScreen()), normal)
+        # A fake module without size() leaves the image alone.
+        self.assertIs(_to_logical_size(retina, FakePyAutoGUI()), retina)
 
 
 if __name__ == "__main__":
