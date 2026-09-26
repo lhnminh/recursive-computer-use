@@ -50,7 +50,7 @@ retired skills make a good dashboard panel.
 
 ## X3. Metrics history and learning curve (~45 min)
 
-- [ ] New `evolution/analytics.py`:
+- [x] New `evolution/analytics.py`:
       - `record_metrics(db, task_key, policy_version, metrics)` inserts one
         point into `run_metrics`.
       - `learning_curve(db, task_key)` is one aggregation. It returns, per
@@ -60,9 +60,9 @@ retired skills make a good dashboard panel.
       - `policy_lineage(db, task_key)` uses `$graphLookup` on `policies`
         (`parent_version` → `version`) to return the chain from v1 to the
         latest accepted policy.
-- [ ] Add a request for Minh in `GOALS.md` to call `record_metrics` after
+- [x] Add a request for Minh in `GOALS.md` to call `record_metrics` after
       each verified run.
-- [ ] Test against `rcu_test_codex` with seeded data.
+- [x] Test against `rcu_test_codex` with seeded data.
 
 ## X4. Dashboard shows the Atlas features (~45 min)
 
@@ -91,3 +91,4 @@ retired skills make a good dashboard panel.
 
 <!-- One line per finished task: task id, commit hash, one-line result. -->
 - X1, `7a1e860`, atomic verdict/status update, duplicate save result, Atlas rollback check.
+- X2, `61b1835`, accepted-policy change stream with persisted resume and restart delivery.
