@@ -14,10 +14,12 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pymongo>=4.6.0",
     "playwright>=1.63.0",
+    "streamlit>=1.40.0",
 ]
 
 [project.scripts]
 recursive-computer-use = "recursive_computer_use:main"
+recursive-computer-use-chat = "recursive_computer_use.chat_runtime:launch"
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]
