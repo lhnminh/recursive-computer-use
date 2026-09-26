@@ -15,6 +15,14 @@ DEFAULT_RULES = (
     "Use short action groups and verify visible state after each group.",
     "Stop rather than guessing when the expected control is not visible.",
 )
+# The only lessons the harness writes. Anything else in Atlas is untrusted
+# and never reaches a policy, because policy rules become the system prompt.
+LESSONS = {
+    "wrong_field": "Immediately before typing, inspect the screen and verify the focused field label.",
+    "wrong_click": "Immediately before clicking, inspect the screen and verify the target control.",
+    "policy_violation": "Use smaller action groups and remain within the enforced action budget.",
+    "task_failure": "After an unexpected state, inspect the screen and revise the next action instead of retrying blindly.",
+}
 DEFAULT_LIMITS = {
     "max_actions_without_screenshot": 3,
     "action_budget": 40,
@@ -132,7 +140,8 @@ class EvolutionRuntime:
             query_text=f"{experience.summary} {experience.lesson}",
             limit=3,
         )
-        learned_lessons = lessons_from(memories)
+        known = set(LESSONS.values())
+        learned_lessons = [lesson for lesson in lessons_from(memories) if lesson in known]
         rules = list(parent.rules)
         for lesson in learned_lessons:
             if lesson not in rules:
@@ -182,10 +191,7 @@ class EvolutionRuntime:
 
     @staticmethod
     def _lesson(tags: list[str]) -> str:
-        if "wrong_field" in tags:
-            return "Immediately before typing, inspect the screen and verify the focused field label."
-        if "wrong_click" in tags:
-            return "Immediately before clicking, inspect the screen and verify the target control."
-        if "policy_violation" in tags:
-            return "Use smaller action groups and remain within the enforced action budget."
-        return "After an unexpected state, inspect the screen and revise the next action instead of retrying blindly."
+        for tag in ("wrong_field", "wrong_click", "policy_violation"):
+            if tag in tags:
+                return LESSONS[tag]
+        return LESSONS["task_failure"]

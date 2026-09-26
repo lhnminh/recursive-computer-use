@@ -233,7 +233,9 @@ def run(
             if verbose:
                 print(f"[evolution] record failed: {exc}", file=sys.stderr)
 
-    policy_text = "\n".join(f"- {rule}" for rule in policy.rules)
+    # Rules come from Atlas. Keep each to one bounded line so a stored rule
+    # cannot smuggle extra instructions into the system prompt.
+    policy_text = "\n".join(f"- {' '.join(str(rule).split())[:300]}" for rule in policy.rules)
     messages: list[dict[str, Any]] = [
         {
             "role": "system",

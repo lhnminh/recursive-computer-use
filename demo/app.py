@@ -86,8 +86,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(404, b"not found", "text/plain")
 
+    def _same_origin(self) -> bool:
+        """Block other sites and DNS-rebound hosts from forging verifier events."""
+
+        allowed = {f"{HOST}:{PORT}", f"localhost:{PORT}"}
+        if self.headers.get("Host") not in allowed:
+            return False
+        origin = self.headers.get("Origin")
+        return origin is None or origin in {f"http://{host}" for host in allowed}
+
     def do_POST(self) -> None:  # noqa: N802
         global STATE
+        if not self._same_origin():
+            self._send(403, b"forbidden", "text/plain")
+            return
         if self.path == "/api/reset":
             with LOCK:
                 STATE = fresh_state()
@@ -96,8 +108,16 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/api/event":
             self._send(404, b"not found", "text/plain")
             return
-        length = min(int(self.headers.get("Content-Length", "0")), 4096)
-        event = json.loads(self.rfile.read(length) or b"{}")
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 <= length <= 4096:
+                raise ValueError("bad length")
+            event = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(event, dict):
+                raise ValueError("event must be an object")
+        except ValueError:
+            self._send(400, b"bad request", "text/plain")
+            return
         with LOCK:
             event_type = event.get("type")
             if event_type == "action":

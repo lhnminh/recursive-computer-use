@@ -13,17 +13,19 @@ git apply docs/security-fixes.patch                       # everything
 git apply --include='demo/*' docs/security-fixes.patch    # one area only
 ```
 
+Fixes 2, 5 and 6 are on `main`. Skip them when you apply the patch.
+
 If your file has uncommitted work, commit it first. Then use
 `git apply --3way` so git merges around your changes.
 
 | # | Severity | Problem | File | Owner |
 |---|---|---|---|---|
 | 1 | Critical | Model code escapes the sandbox | `sandbox.py` | Minh |
-| 2 | High | Any website can fake verifier results | `demo/app.py` | Codex |
+| 2 | High | Any website can fake verifier results | `demo/app.py` | Codex (**done**) |
 | 3 | Medium | Some pyautogui calls skip policy and recording | `sandbox.py` | Minh |
 | 4 | Medium | Dashboard: unescaped HTML and DNS rebinding | `dashboard/app.py` | Codex |
-| 5 | Medium | Atlas lessons go into the system prompt unchecked | `evolution/runtime.py`, `agent.py` | Claude, Minh |
-| 6 | Low | `test_store` fails on `main` | `tests/test_store.py` | Minh |
+| 5 | Medium | Atlas lessons go into the system prompt unchecked | `evolution/runtime.py`, `agent.py` | Claude, Minh (**done**) |
+| 6 | Low | `test_store` fails on `main` | `tests/test_store.py` | Minh (**done**) |
 
 ## 1. Model code escapes the sandbox
 
