@@ -70,6 +70,16 @@ changes. Never discard a dirty working tree to simplify your task.
   - Restricts built-ins and imports available to generated code.
 - `src/recursive_computer_use/verification.py`
   - Fetches metrics only from localhost HTTP endpoints.
+- `src/recursive_computer_use/recovery.py`
+  - `RecoveryMonitor` watches each tool result for three stuck signals:
+    actions with no screen change, repeated code, and repeated errors.
+  - Two signals in a row add a recovery hint to the tool result. More than
+    the policy's `retry_limit` hints abort the run.
+  - A failed verification sends the model back to fix the task, up to
+    `retry_limit` times. The evolution engine sees only the final metrics.
+  - Stuck aborts and turn-limit timeouts still run the verifier, so they
+    become verified failures.
+  - Keeps screen hashes and code digests in memory only. Persists counts.
 
 ### Persistence
 
@@ -290,6 +300,10 @@ Use only:
 - `timeout`, `error`, `interrupted`: the run did not finish.
 
 Only `success` and `failure` count toward skill `uses`, `wins`, and `lift`.
+
+Each episode also has `recovery`: `nudges`, `no_effect`, `repeated_code`,
+`repeated_errors`, `tool_errors`, `verifier_retries` (counts) and
+`abort_reason` (`"stuck"` or null).
 
 ### Skill statuses
 

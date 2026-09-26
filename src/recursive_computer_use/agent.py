@@ -9,8 +9,13 @@ It writes Python that uses pyautogui to operate the desktop, calls display()
 to send screenshots back, and calls log() to emit text.
 
 The loop runs until:
-  - The model returns a final message with no tool calls, or
+  - The model returns a final message with no tool calls and the verifier
+    (if any) accepts it or no verifier retries remain,
+  - The recovery monitor aborts a stuck run, or
   - The turn limit is reached.
+
+Every ending except an interrupt runs the verifier, so a stuck or timed-out
+run still produces a verified failure for the evolution engine.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from .auth import resolve as resolve_auth
 from .evolution.models import EvaluationMetrics, HarnessPolicy
 from .evolution.runtime import DEFAULT_LIMITS, DEFAULT_RULES, EvolutionRuntime
 from .learning import LearningStore
+from .recovery import RecoveryMonitor
 from .sandbox import Sandbox
 from .store import ActionStore
 from .verification import fetch_local_metrics
@@ -170,6 +176,62 @@ def run(
     verified_metrics: EvaluationMetrics | None = None
     llm_calls = tokens_in = tokens_out = 0
     timed_out = False
+    recovery = RecoveryMonitor(int(policy.limits.get("retry_limit", 2)))
+
+    def check() -> EvaluationMetrics | None:
+        """Read verifier metrics merged with local counts. Never raises."""
+        if not verifier_url:
+            return None
+        try:
+            verified = fetch_local_metrics(verifier_url)
+        except Exception as exc:
+            if verbose:
+                print(f"[evolution] verifier failed: {exc}", file=sys.stderr)
+            return None
+        return EvaluationMetrics(
+            success_rate=verified.success_rate,
+            wrong_clicks=verified.wrong_clicks,
+            wrong_field_entries=verified.wrong_field_entries,
+            policy_violations=(
+                verified.policy_violations
+                + int(getattr(action_store, "policy_violation_count", 0))
+            ),
+            action_count=max(
+                verified.action_count,
+                int(getattr(action_store, "action_count", 0)),
+            ),
+            duration_ms=verified.duration_ms,
+        )
+
+    def record(metrics: EvaluationMetrics | None) -> None:
+        """Feed final verified metrics to evolution and telemetry once."""
+        nonlocal verified_metrics
+        if metrics is None:
+            return
+        verified_metrics = metrics
+        try:
+            evolution_result = (
+                evolution_runtime.record_verified_run(policy, metrics)
+                if evolution_runtime is not None
+                else None
+            )
+            if hasattr(action_store, "attach_verification"):
+                action_store.attach_verification(
+                    run_id,
+                    task_key=task_key,
+                    policy_version=policy.version,
+                    metrics=metrics.to_document(),
+                    evolution_result=evolution_result,
+                )
+            if verbose:
+                print(
+                    f"[evolution] verified metrics={metrics.to_document()} "
+                    f"result={evolution_result}",
+                    file=sys.stderr,
+                )
+        except Exception as exc:
+            if verbose:
+                print(f"[evolution] record failed: {exc}", file=sys.stderr)
 
     policy_text = "\n".join(f"- {rule}" for rule in policy.rules)
     messages: list[dict[str, Any]] = [
@@ -209,56 +271,29 @@ def run(
             # that are present in newer SDK versions but rejected by some API endpoints.
             messages.append(msg.model_dump(exclude_unset=True, exclude_none=True))
 
-            # No tool calls → model is done
+            # No tool calls → model says it is done. Only the verifier decides.
             if not msg.tool_calls:
                 final_text = msg.content or ""
+                metrics = check()
+                retry = (
+                    recovery.verifier_retry_prompt(metrics)
+                    if metrics is not None and turn < MAX_TURNS
+                    else None
+                )
+                if retry:
+                    if verbose:
+                        print(f"[recovery] {retry}", file=sys.stderr)
+                    messages.append({"role": "user", "content": retry})
+                    continue
                 status = "completed"
-                if verifier_url:
-                    try:
-                        verified = fetch_local_metrics(verifier_url)
-                        metrics = EvaluationMetrics(
-                            success_rate=verified.success_rate,
-                            wrong_clicks=verified.wrong_clicks,
-                            wrong_field_entries=verified.wrong_field_entries,
-                            policy_violations=(
-                                verified.policy_violations
-                                + int(getattr(action_store, "policy_violation_count", 0))
-                            ),
-                            action_count=max(
-                                verified.action_count,
-                                int(getattr(action_store, "action_count", 0)),
-                            ),
-                            duration_ms=verified.duration_ms,
-                        )
-                        verified_metrics = metrics
-                        evolution_result = (
-                            evolution_runtime.record_verified_run(policy, metrics)
-                            if evolution_runtime is not None
-                            else None
-                        )
-                        if hasattr(action_store, "attach_verification"):
-                            action_store.attach_verification(
-                                run_id,
-                                task_key=task_key,
-                                policy_version=policy.version,
-                                metrics=metrics.to_document(),
-                                evolution_result=evolution_result,
-                            )
-                        if verbose:
-                            print(
-                                f"[evolution] verified metrics={metrics.to_document()} "
-                                f"result={evolution_result}",
-                                file=sys.stderr,
-                            )
-                    except Exception as exc:
-                        if verbose:
-                            print(f"[evolution] verifier failed: {exc}", file=sys.stderr)
+                record(metrics)
                 if verbose:
                     print(f"[done] {final_text}", file=sys.stderr)
                 return final_text
 
             if turn == MAX_TURNS:
                 timed_out = True
+                record(check())
                 raise RuntimeError(
                     f"Reached the {MAX_TURNS}-turn limit without a final answer."
                 )
@@ -278,7 +313,11 @@ def run(
                     preview = code.splitlines()[0][:80]
                     print(f"  exec_py: {preview!r}", file=sys.stderr)
 
+                actions_before = _desktop_actions(action_store)
                 result = sandbox.run(code)
+                hint = recovery.observe(
+                    code, result, _desktop_actions(action_store) - actions_before
+                )
 
                 if verbose and result.get("error"):
                     print(f"  error: {result['error'].splitlines()[-1]}", file=sys.stderr)
@@ -292,6 +331,10 @@ def run(
                 # blocks inside tool-role messages, so screenshots are appended as a
                 # follow-up `user` message instead.
                 text_content, image_blocks = _build_tool_content(result)
+                if hint:
+                    text_content += f"\n\n{hint}"
+                    if verbose:
+                        print(f"  [recovery] nudge {recovery.nudges}", file=sys.stderr)
 
                 messages.append({
                     "role": "tool",
@@ -305,6 +348,13 @@ def run(
                         "role": "user",
                         "content": image_blocks,
                     })
+
+            if recovery.should_abort:
+                record(check())
+                raise RuntimeError(
+                    f"Run aborted: still stuck after {recovery.retry_limit} "
+                    "recovery attempt(s)."
+                )
     except KeyboardInterrupt:
         status = "interrupted"
         raise
@@ -324,11 +374,19 @@ def run(
                 llm_calls=llm_calls,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
+                recovery=recovery.to_document(),
             )
         if owns_store:
             action_store.close()
 
     raise RuntimeError("Agentic loop exited unexpectedly.")
+
+
+def _desktop_actions(action_store: Any) -> int:
+    """Desktop actions that reached pyautogui (policy violations excluded)."""
+    return int(getattr(action_store, "action_count", 0)) - int(
+        getattr(action_store, "policy_violation_count", 0)
+    )
 
 
 def _episode_outcome(

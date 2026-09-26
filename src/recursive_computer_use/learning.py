@@ -218,8 +218,13 @@ class LearningStore:
         llm_calls: int = 0,
         tokens_in: int = 0,
         tokens_out: int = 0,
+        recovery: Mapping[str, Any] | None = None,
     ) -> None:
-        """Write one episode, update its site and skills, recompute lift."""
+        """Write one episode, update its site and skills, recompute lift.
+
+        *recovery* holds the run's failure-signal counts from
+        :class:`~recursive_computer_use.recovery.RecoveryMonitor`.
+        """
         now = _utcnow()
         site = site_from_prompt(prompt, task_key)
         try:
@@ -238,6 +243,7 @@ class LearningStore:
                     "llm_calls": llm_calls,
                     "tokens_in": tokens_in,
                     "tokens_out": tokens_out,
+                    "recovery": dict(recovery) if recovery else None,
                     "duration_ms": int((now - started_at).total_seconds() * 1000),
                     "started_at": started_at,
                     "finished_at": now,

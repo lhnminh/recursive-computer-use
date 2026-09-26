@@ -175,3 +175,7 @@ Voyage retrieval helpers Codex can call (read-only):
   future multi-task runner. Do not pass held-out cases into promotion. The
   existing two-run runtime should keep its current behavior until task split
   and replay orchestration are explicit.
+- Minh (FYI, done by Claude 2026-09-26): `agent.py` now uses
+  `recovery.RecoveryMonitor`. Stuck runs get hints, then abort. A failed
+  verification sends the model back up to `retry_limit` times. Every ending
+  except an interrupt runs the verifier. `sandbox.py` is untouched.

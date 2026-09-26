@@ -232,6 +232,19 @@ COLLECTIONS: dict[str, dict[str, Any]] = {
                 "tokens_in": _INT,
                 "tokens_out": _INT,
                 "cost_usd": _NUM,
+                # RecoveryMonitor counts: how the run got stuck and recovered.
+                "recovery": {
+                    "bsonType": ["object", "null"],
+                    "properties": {
+                        "nudges": _INT,
+                        "no_effect": _INT,
+                        "repeated_code": _INT,
+                        "repeated_errors": _INT,
+                        "tool_errors": _INT,
+                        "verifier_retries": _INT,
+                        "abort_reason": _OPT_STR,
+                    },
+                },
                 "duration_ms": _INT,
                 "started_at": _DATE,
                 "finished_at": _DATE,
