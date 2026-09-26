@@ -14,7 +14,6 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 
 from ..recipes import RecipeStore
-from .capture import record
 from .learner import fill_params, learn_recipe
 from .runner import run_recipe
 
@@ -25,7 +24,7 @@ def do_task(
     site: str,
     task_key: str,
     store: Any = None,
-    capture_fn: Callable[..., Any] = record,
+    capture_fn: Callable[..., Any] | None = None,
     learn_fn: Callable[..., Any] = learn_recipe,
     fill_fn: Callable[..., Any] = fill_params,
     runner_fn: Callable[..., Any] = run_recipe,
@@ -33,8 +32,9 @@ def do_task(
     """Try a stored recipe, then teach and replay once when needed.
 
     Optional collaborators make the orchestration testable without Atlas,
-    browser launch, or model calls. Runtime fallback intentionally launches
-    the visible recording browser and opts into computer use.
+    browser launch, or model calls. Runtime fallback uses a local headless
+    Playwright browser; pass ``capture_fn=network.capture.record`` to record a
+    headed human/computer-use session instead.
     """
     site_host = _normalize_site(site)
     url = site if urlsplit(site).scheme else f"http://{site_host}/"
@@ -80,6 +80,10 @@ def do_task(
             run_result = {"ok": False, "error": "parameter extraction failed", "steps": []}
 
     # No usable recipe or replay failure: perform the task once while recording.
+    if capture_fn is None:
+        from .browser_agent import record_headless
+
+        capture_fn = record_headless
     started = time.monotonic()
     recording_path = Path(".recordings") / f"{uuid.uuid4().hex}.har"
     captured = capture_fn(
@@ -92,6 +96,9 @@ def do_task(
     capture_result = _as_dict(captured)
     events.append({"event": "capture", **capture_result})
     har_path = getattr(captured, "har_path", capture_result.get("har_path", recording_path))
+    if not capture_result.get("ok"):
+        events.append({"event": "learning_skipped", "reason": "capture was not verified successful"})
+        return _response(False, "fallback_failed", events, timings, old_id)
 
     started = time.monotonic()
     learned = learn_fn(har_path, task, site=site_host, task_key=task_key)

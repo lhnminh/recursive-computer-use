@@ -294,10 +294,12 @@ python -m recursive_computer_use do `
   "Check in Grace Hopper with email grace@example.com and city New York."
 ```
 
-When `do` finds no working recipe, it opens the headed recording browser and
-uses the local computer-use agent once to teach a replacement. For the `learn`
-command, the default leaves control with the person; add `--agent` only when
-you intentionally want computer use to drive that recording.
+When `do` finds no working recipe, it uses a local headless Chromium session
+and a page-element agent to teach a replacement without screenshots or desktop
+mouse control. The capture must pass the local verifier before it can train a
+recipe. For the `learn` command, the default leaves control with the person;
+add `--agent` only when you intentionally want desktop computer use to drive
+that recording.
 
 For the complete break-and-heal presentation, run:
 

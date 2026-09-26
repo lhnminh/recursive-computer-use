@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from recursive_computer_use.network.loop import do_task
 from recursive_computer_use.network.recipe import Recipe
@@ -104,6 +105,40 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(self.learns[0][0], Path("local.har"))
         self.assertEqual(store.saved[0][1], "rec-1")
         self.assertEqual(store.recorded[0][0], "new-recipe")
+
+    def test_default_fallback_uses_headless_browser_agent(self):
+        store = _Store()
+        captured = SimpleNamespace(
+            har_path=Path("headless.har"),
+            ok=True,
+            duration_ms=10,
+            recording_id="headless-recording",
+        )
+        with patch("recursive_computer_use.network.browser_agent.record_headless", return_value=captured) as capture:
+            result = self.invoke(
+                store,
+                capture_fn=None,
+                runner_fn=lambda recipe, params: {"ok": True, "steps": [], "duration_ms": 8},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(capture.call_args.args[0], "http://127.0.0.1:8765/")
+        self.assertEqual(capture.call_args.kwargs["agent_prompt"], "check in Ada")
+        self.assertEqual(self.learns[0][0], Path("headless.har"))
+
+    def test_unverified_capture_does_not_train_a_recipe(self):
+        store = _Store()
+        result = self.invoke(
+            store,
+            capture_fn=lambda *_args, **_kwargs: SimpleNamespace(
+                har_path=Path("failed.har"), ok=False, duration_ms=10
+            ),
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["path"], "fallback_failed")
+        self.assertEqual(self.learns, [])
+        self.assertEqual(store.saved, [])
 
     def test_failed_recipe_is_retired_superseded_and_replayed_once(self):
         recipe = _recipe()
