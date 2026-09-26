@@ -224,3 +224,6 @@ Cluster runs MongoDB **8.0.32**.
   a multi-task runner. Do not pass held-out cases into promotion.
 - Claude (open): accepted/default policy rules need a protected marker and
   must not be auto-retired from observational lift alone.
+- Codex: Adarsha removed the local chat UI from `7be53a8` in `a2e0167` and
+  banned its framework. Do not re-add it; `tests/test_banned.py` fails if it
+  returns. Build any UI on the existing `dashboard/` stack instead.
