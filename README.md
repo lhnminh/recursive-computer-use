@@ -267,6 +267,41 @@ See `schema.py` and the **Search indexes** section of `AGENTS.md`.
 Atlas search indexes provision asynchronously. Until the index is available,
 retrieval safely falls back to recent memories for the same task key.
 
+## Coordinate guide replay
+
+Run with `--verbose` to see turn-by-turn activity. Guide lookup, replay, and
+learning are enabled by default:
+
+```bash
+uv run recursive-computer-use --verbose "your task here"
+```
+
+The agent looks for a matching guide before navigating. It replays a saved
+guide when available; otherwise, it navigates from screenshots and saves
+successful actions. If replay fails, it falls back to screenshot-guided
+navigation and replaces the guide after a successful run. Use `--no-guides` to
+disable guide lookup, replay, and capture. `--guides` and `--replay-guides` are
+available as explicit reminders.
+
+Guides are stored in MongoDB's `guides` collection in the database configured
+by `MONGODB_DB` (default `recursive_computer_use`) and in a local JSON fallback
+at `~/.recursive_computer_use/guides.json`. Set `MONGODB_URI` to your MongoDB
+connection string. If MongoDB is unavailable, the run completes and saves the
+guide locally. Private LinkedIn text is stored as a placeholder; replay fills
+the site and requested text from the current prompt.
+
+For example, to draft a post on Reddit:
+
+```bash
+uv run recursive-computer-use --verbose "On Reddit, draft a post saying hello"
+```
+
+The task key currently uses the prompt text, so repeat the same prompt to reuse
+the guide. A guide stores its site, task and environment key, ordered action
+steps, model, timestamps, and success/failure counters. It does not store the
+full prompt or action history; those remain in the existing `runs` and
+`actions` collections.
+
 ## Network recipe path
 
 The network path turns one local browser demonstration into a reusable API

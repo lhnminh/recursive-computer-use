@@ -103,6 +103,7 @@ class ActionStore:
         enabled: bool,
     ) -> None:
         self._client = client
+        self.db_name = db_name
         self._enabled = enabled
         self._seq = 0  # monotonic action counter within the process/run
         self._action_count = 0
@@ -175,6 +176,10 @@ class ActionStore:
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    def collection(self, name: str) -> Any | None:
+        """Return a Mongo collection when connected, otherwise ``None``."""
+        return self._client[self.db_name][name] if self._enabled and self._client else None
 
     # -- run lifecycle -----------------------------------------------------
 
