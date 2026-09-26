@@ -225,12 +225,12 @@ def run_browser_task(
     started = time.monotonic()
     result = BrowserAgentResult(False, False, "", 0, 0, 0, 0)
     client = client or default_client()
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Task: {task}"},
-    ]
+    system_message = {"role": "system", "content": SYSTEM_PROMPT}
+    task_message = {"role": "user", "content": f"Task: {task}"}
     snapshot = observe(page)
-    messages[-1]["content"] += "\n\n" + render_observation(snapshot)
+    observation = {"role": "user", "content": "Current page:\n" + render_observation(snapshot)}
+    messages = [system_message, task_message, observation]
+    recent_actions: list[str] = []
 
     for turn in range(1, max_turns + 1):
         if deadline is not None and time.monotonic() > deadline:
@@ -248,7 +248,10 @@ def run_browser_task(
         calls = list(message.tool_calls or [])
         messages.append(_assistant_message(message, calls))
         if not calls:
-            messages.append({"role": "user", "content": "Call act or finish."})
+            recent_actions.append("No action was returned; choose an act or finish tool call.")
+            messages = _compact_messages(
+                system_message, task_message, recent_actions, snapshot
+            )
             continue
 
         finished = False
@@ -269,6 +272,14 @@ def run_browser_task(
             count, error = perform(page, actions, known)
             result.actions += count
             result.trace.append({"turn": turn, "actions": count, "error": error})
+            operations = ", ".join(
+                str(action.get("op", "?")) for action in actions[:count]
+            )
+            note = f"Completed {count} action(s)" + (f" ({operations})" if operations else "")
+            if error:
+                note += f"; {error}"
+            recent_actions.append(note)
+            recent_actions = recent_actions[-3:]
             if verify is not None and _safe_verify(verify):
                 result.ok = result.verified = True
                 result.summary = "verifier passed"
@@ -278,6 +289,7 @@ def run_browser_task(
             messages.append(_tool_reply(call, status + "\n\n" + render_observation(snapshot)))
         if finished:
             break
+        messages = _compact_messages(system_message, task_message, recent_actions, snapshot)
     else:
         result.error = result.error or f"no finish after {max_turns} turns"
 
@@ -286,6 +298,22 @@ def run_browser_task(
         result.ok = result.ok and result.verified
     result.duration_ms = int((time.monotonic() - started) * 1000)
     return result
+
+
+def _compact_messages(
+    system_message: dict[str, Any],
+    task_message: dict[str, Any],
+    recent_actions: list[str],
+    snapshot: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Keep the task and latest page, not every full snapshot in the transcript."""
+    notes = "\n".join(f"- {note}" for note in recent_actions)
+    summary = {"role": "assistant", "content": "Recent actions:\n" + notes}
+    observation = {
+        "role": "user",
+        "content": "Current page:\n" + render_observation(snapshot),
+    }
+    return [system_message, task_message, summary, observation]
 
 
 def record_headless(
