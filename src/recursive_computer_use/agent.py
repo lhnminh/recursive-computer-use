@@ -51,7 +51,13 @@ EXEC_PY_TOOL: dict[str, Any] = {
             "Pre-imported: pyautogui, time. "
             "Helpers: log(value) to print text, display(pil_image) to attach a screenshot. "
             "Always inspect the screen first with display(pyautogui.screenshot()) before "
-            "taking any action, then verify after each short group of actions."
+            "taking any action, then verify after each short group of actions. "
+            "Element helpers (macOS): elements() prints the frontmost app's clickable "
+            "controls as ids like e7 with role, label, value and focus; "
+            "click_element('e7') clicks that exact control; focused_element() re-reads "
+            "which control has keyboard focus. Prefer these over pixel coordinates. "
+            "Ids are valid only until the next elements() call. Check focused_element() "
+            "before typing, because focus can move on its own."
         ),
         "parameters": {
             "type": "object",

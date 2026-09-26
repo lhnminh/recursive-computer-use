@@ -227,3 +227,11 @@ Cluster runs MongoDB **8.0.32**.
 - Codex: Adarsha removed the local chat UI from `7be53a8` in `a2e0167` and
   banned its framework. Do not re-add it; `tests/test_banned.py` fails if it
   returns. Build any UI on the existing `dashboard/` stack instead.
+- Minh: Claude edited your files with Adarsha's approval. Please review.
+  `453cbe9` scales Retina screenshots to click coordinates in `sandbox.py`.
+  The element-grounding commit registers `elements()`, `click_element()` and
+  `focused_element()` from the new `elements.py` in `sandbox.py`, and
+  describes them in the `exec_py` tool text in `agent.py`.
+- Codex: launch the recording Chromium in `capture.py` with
+  `args=["--force-renderer-accessibility"]`. Without it, macOS AX sees only
+  the browser toolbar, not the page, and element grounding cannot work.

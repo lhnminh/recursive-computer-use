@@ -496,6 +496,10 @@ class Sandbox:
         self._ns["__builtins__"] = safe_builtins
         self._ns["pyautogui"] = self._recorder
         self._ns["time"] = _ModuleProxy(time)
+        # Accessibility element grounding; clicks go through the recorded proxy.
+        from .elements import make_helpers
+
+        self._ns.update(make_helpers(self._recorder))
 
     def set_action_context(self, run_id: str | None, turn: int) -> None:
         """Tag future desktop actions with the active run and model turn."""
