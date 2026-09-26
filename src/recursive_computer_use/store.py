@@ -98,6 +98,12 @@ class ActionStore:
     # -- construction ------------------------------------------------------
 
     @classmethod
+    def disabled(cls, db_name: str | None = None) -> "ActionStore":
+        """Return an explicitly disabled store without attempting a connection."""
+
+        return cls(None, db_name or DEFAULT_DB, enabled=False)
+
+    @classmethod
     def connect(
         cls,
         uri: str | None = None,

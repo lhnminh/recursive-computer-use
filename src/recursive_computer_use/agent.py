@@ -23,6 +23,7 @@ from openai import OpenAI
 
 from .auth import resolve as resolve_auth
 from .sandbox import Sandbox
+from .store import ActionStore
 
 # Maximum round-trips before we give up.
 MAX_TURNS = 30
@@ -77,6 +78,10 @@ def run(
     *,
     model: str = "gpt-5.5",
     verbose: bool = False,
+    mongodb_uri: str | None = None,
+    mongodb_db: str | None = None,
+    log_actions: bool = True,
+    action_store: ActionStore | None = None,
 ) -> str:
     """
     Run a computer-use task described by *prompt*.
@@ -90,6 +95,12 @@ def run(
         Use ``gpt-5.6-sol`` or ``gpt-6-astra`` for more capable models.
     verbose:
         Print turn-by-turn activity to stderr.
+    mongodb_uri / mongodb_db:
+        Optional MongoDB connection overrides used for action telemetry.
+    log_actions:
+        Disable all MongoDB telemetry when false.
+    action_store:
+        Optional injected store used by tests and embedding applications.
 
     Returns
     -------
@@ -103,81 +114,101 @@ def run(
         _check_proxy(creds.base_url)
 
     client = OpenAI(api_key=creds.api_key, base_url=creds.base_url)
-    sandbox = Sandbox()
-
-    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
-
-    for turn in range(1, MAX_TURNS + 1):
-        if verbose:
-            print(f"[turn {turn}] calling model …", file=sys.stderr)
-
-        response = client.chat.completions.create(
-            model=model,
-            tools=[EXEC_PY_TOOL],
-            messages=messages,
+    owns_store = action_store is None
+    if action_store is None:
+        action_store = (
+            ActionStore.connect(mongodb_uri, mongodb_db, verbose=verbose)
+            if log_actions
+            else ActionStore.disabled(mongodb_db)
         )
 
-        choice = response.choices[0]
-        msg = choice.message
+    run_id = action_store.start_run(prompt, model)
+    sandbox = Sandbox(store=action_store)
+    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    status = "failed"
+    final_text: str | None = None
 
-        # Append assistant message to history.
-        # exclude_unset=True + exclude_none=True drops fields like `annotations`
-        # that are present in newer SDK versions but rejected by some API endpoints.
-        messages.append(msg.model_dump(exclude_unset=True, exclude_none=True))
-
-        # No tool calls → model is done
-        if not msg.tool_calls:
-            final_text = msg.content or ""
+    try:
+        for turn in range(1, MAX_TURNS + 1):
             if verbose:
-                print(f"[done] {final_text}", file=sys.stderr)
-            return final_text
+                print(f"[turn {turn}] calling model …", file=sys.stderr)
 
-        if turn == MAX_TURNS:
-            raise RuntimeError(
-                f"Reached the {MAX_TURNS}-turn limit without a final answer."
+            response = client.chat.completions.create(
+                model=model,
+                tools=[EXEC_PY_TOOL],
+                messages=messages,
             )
 
-        # Execute each tool call and append results
-        for tool_call in msg.tool_calls:
-            if tool_call.function.name != "exec_py":
-                raise ValueError(
-                    f"Model requested unexpected tool: {tool_call.function.name!r}"
+            choice = response.choices[0]
+            msg = choice.message
+
+            # Append assistant message to history.
+            # exclude_unset=True + exclude_none=True drops fields like `annotations`
+            # that are present in newer SDK versions but rejected by some API endpoints.
+            messages.append(msg.model_dump(exclude_unset=True, exclude_none=True))
+
+            # No tool calls → model is done
+            if not msg.tool_calls:
+                final_text = msg.content or ""
+                status = "completed"
+                if verbose:
+                    print(f"[done] {final_text}", file=sys.stderr)
+                return final_text
+
+            if turn == MAX_TURNS:
+                raise RuntimeError(
+                    f"Reached the {MAX_TURNS}-turn limit without a final answer."
                 )
 
-            args = json.loads(tool_call.function.arguments)
-            code: str = args["code"]
+            # Execute each tool call and append results
+            sandbox.set_action_context(run_id, turn)
+            for tool_call in msg.tool_calls:
+                if tool_call.function.name != "exec_py":
+                    raise ValueError(
+                        f"Model requested unexpected tool: {tool_call.function.name!r}"
+                    )
 
-            if verbose:
-                preview = code.splitlines()[0][:80]
-                print(f"  exec_py: {preview!r}", file=sys.stderr)
+                args = json.loads(tool_call.function.arguments)
+                code: str = args["code"]
 
-            result = sandbox.run(code)
+                if verbose:
+                    preview = code.splitlines()[0][:80]
+                    print(f"  exec_py: {preview!r}", file=sys.stderr)
 
-            if verbose and result.get("error"):
-                print(f"  error: {result['error'].splitlines()[-1]}", file=sys.stderr)
-            if verbose:
-                n_imgs = len(result.get("images", []))
-                if n_imgs:
-                    print(f"  captured {n_imgs} screenshot(s)", file=sys.stderr)
+                result = sandbox.run(code)
 
-            # Build tool result — text only in the `tool` message.
-            # Some API endpoints (e.g. the local Codex proxy) reject image_url
-            # blocks inside tool-role messages, so screenshots are appended as a
-            # follow-up `user` message instead.
-            text_content, image_blocks = _build_tool_content(result)
+                if verbose and result.get("error"):
+                    print(f"  error: {result['error'].splitlines()[-1]}", file=sys.stderr)
+                if verbose:
+                    n_imgs = len(result.get("images", []))
+                    if n_imgs:
+                        print(f"  captured {n_imgs} screenshot(s)", file=sys.stderr)
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": text_content,
-            })
+                # Build tool result — text only in the `tool` message.
+                # Some API endpoints (e.g. the local Codex proxy) reject image_url
+                # blocks inside tool-role messages, so screenshots are appended as a
+                # follow-up `user` message instead.
+                text_content, image_blocks = _build_tool_content(result)
 
-            # Inject screenshots as a user message so the model can see them.
-            if image_blocks:
                 messages.append({
-                    "role": "user",
-                    "content": image_blocks,
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": text_content,
                 })
+
+                # Inject screenshots as a user message so the model can see them.
+                if image_blocks:
+                    messages.append({
+                        "role": "user",
+                        "content": image_blocks,
+                    })
+    except KeyboardInterrupt:
+        status = "interrupted"
+        raise
+    finally:
+        action_store.finish_run(run_id, status, final_text)
+        if owns_store:
+            action_store.close()
 
     raise RuntimeError("Agentic loop exited unexpectedly.")
 

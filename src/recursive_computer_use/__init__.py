@@ -36,13 +36,33 @@ def main() -> None:
         action="store_true",
         help="Print turn-by-turn activity.",
     )
+    parser.add_argument(
+        "--mongodb-uri",
+        help="MongoDB connection URI (default: MONGODB_URI or localhost).",
+    )
+    parser.add_argument(
+        "--mongodb-db",
+        help="MongoDB database name (default: MONGODB_DB or recursive_computer_use).",
+    )
+    parser.add_argument(
+        "--no-log",
+        action="store_true",
+        help="Disable MongoDB run and action telemetry.",
+    )
     args = parser.parse_args()
 
     # Lazy import so startup errors are clean.
     from .agent import run
 
     try:
-        result = run(args.prompt, model=args.model, verbose=args.verbose)
+        result = run(
+            args.prompt,
+            model=args.model,
+            verbose=args.verbose,
+            mongodb_uri=args.mongodb_uri,
+            mongodb_db=args.mongodb_db,
+            log_actions=not args.no_log,
+        )
         print(result)
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
