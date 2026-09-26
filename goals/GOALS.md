@@ -98,6 +98,10 @@ Rules:
   Templates may appear in `url`, header values, and body string values.
 - `extract.from` is one of `json` (dotted path), `header`, `cookie`, or
   `regex` (first group, on the response body).
+- `body_format` (optional, default `json`): `json` sends the body as JSON,
+  `form` as `application/x-www-form-urlencoded`, `text` as-is.
+- A template string that is exactly `{{var}}` renders to the raw value (so
+  JSON numbers stay numbers). Use `network.recipe.render`.
 - Cookies are kept by the runner's cookie jar. Recipes never contain cookie
   values.
 - Recipes never contain secrets, session ids, or example values from the

@@ -9,17 +9,17 @@ Your files: `network/__init__.py`, `network/recipe.py`, `network/har.py`,
 
 Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 
-## N1. Recipe type (first, ~30 min, unblocks Codex)
+## N1. Recipe type — done
 
-- [ ] Create `network/__init__.py` and `network/recipe.py`.
-- [ ] `Recipe`, `Step`, `Extract`, `Param` dataclasses matching the JSON in
+- [x] Create `network/__init__.py` and `network/recipe.py`.
+- [x] `Recipe`, `Step`, `Extract`, `Param` dataclasses matching the JSON in
       `GOALS.md`. `from_dict`, `to_dict`, `validate()`.
-- [ ] `validate()` rejects: unknown `extract.from`, a `{{var}}` that no param
+- [x] `validate()` rejects: unknown `extract.from`, a `{{var}}` that no param
       or earlier extract defines, a step URL whose host is not
       `scope.site`, methods other than GET/POST/PUT/PATCH/DELETE, cookie or
       authorization headers, more than 20 steps.
-- [ ] `render(template, values)` helper for `{{var}}`: shared by the runner.
-- [ ] Unit tests with fakes. Push, then tick the box so Codex knows.
+- [x] `render(template, values)` helper for `{{var}}`: shared by the runner.
+- [x] Unit tests with fakes. Push, then tick the box so Codex knows.
 
 ## N2. Schema for recipes and recordings (~20 min)
 
@@ -83,3 +83,4 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 
 <!-- One line per finished task: task id, commit hash, one-line result. -->
 - Phase 1: C1, C2, C2b (`5514ede`), C3 (`87d6d57`).
+- N1: `network/recipe.py` — `Recipe`, `render`, `template_vars`, `validate()`; 13 tests.
