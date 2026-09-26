@@ -74,7 +74,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(client.database.collections["actions"].inserted[0]["kind"], "click")
         finish = client.database.collections["runs"].updated[0][1]["$set"]
         self.assertEqual(finish["status"], "completed")
-        self.assertEqual(finish["final_text"], "done")
+        self.assertEqual(finish["final_summary"], "done")
 
     def test_connection_failure_returns_disabled_store(self):
         with patch(
