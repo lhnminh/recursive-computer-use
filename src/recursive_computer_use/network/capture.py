@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 
 from .har import Redactor, endpoints, har_sha256, load_exchanges
+from .session import save_session
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class CaptureResult:
     timed_out: bool
     source: str
     recording_id: Any = None
+    session_path: Path | None = None  # local login cookies; never sent anywhere
 
 
 def record(
@@ -60,6 +62,7 @@ def record(
     source = "agent" if agent_prompt else "human"
     verifier_result: dict[str, Any] | None = None
     timed_out = False
+    saved_session: Path | None = None
 
     try:
         from playwright.sync_api import sync_playwright
@@ -95,6 +98,10 @@ def record(
                         break
                     time.sleep(min(0.25, max(0, deadline - time.monotonic())))
             timed_out = not bool(verifier_result and verifier_result.get("success") is True)
+            try:
+                saved_session = save_session(context, _site(url))
+            except Exception:  # a lost session must not lose the recording
+                saved_session = None
         finally:
             context.close()  # flushes the HAR
             browser.close()
@@ -123,6 +130,7 @@ def record(
         timed_out=timed_out,
         source=source,
         recording_id=recording_id,
+        session_path=saved_session,
     )
 
 

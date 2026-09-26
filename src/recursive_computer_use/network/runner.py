@@ -12,7 +12,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, Request, build_opener
 
-from .recipe import Recipe, RecipeError, render
+from .recipe import Recipe, RecipeError, render, resolve_session_vars
+from .session import cookie_jar_for, cookies_for, load_storage_state
 
 STEP_TIMEOUT_S = 10
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -46,8 +47,18 @@ class _ScopedRedirectHandler(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def run_recipe(recipe: Recipe | Mapping[str, Any], params: Mapping[str, Any]) -> RunResult:
+def run_recipe(
+    recipe: Recipe | Mapping[str, Any],
+    params: Mapping[str, Any],
+    *,
+    session_cookies: Mapping[str, str] | None = None,
+) -> RunResult:
     """Run a recipe and report per-step timings and the verifier's verdict.
+
+    The cookie jar starts with the site's login cookies: *session_cookies*
+    (name -> value) if given, else the local saved session (see
+    ``network.session``), else none. ``recipe.session`` vars are read from
+    those cookies; a missing one fails the run with "log in again".
 
     Errors are returned without response bodies or request headers, which can
     contain task data or session material.
@@ -65,7 +76,13 @@ def run_recipe(recipe: Recipe | Mapping[str, Any], params: Mapping[str, Any]) ->
             raise RecipeError(f"params mismatch (missing={sorted(missing)}, extra={sorted(extra)})")
 
         values: dict[str, Any] = dict(params)
-        jar = CookieJar()
+        if session_cookies is None:
+            state = load_storage_state(recipe.site)
+            jar = cookie_jar_for(recipe.site, state)
+            session_cookies = cookies_for(recipe.site, state)
+        else:
+            jar = _jar_from_cookies(recipe.site, session_cookies)
+        values.update(resolve_session_vars(recipe, session_cookies))
         opener = build_opener(HTTPCookieProcessor(jar), _ScopedRedirectHandler(recipe.site))
         for step in recipe.steps:
             url = render(step.url, values)
@@ -121,6 +138,17 @@ def run_recipe(recipe: Recipe | Mapping[str, Any], params: Mapping[str, Any]) ->
 
 class _RunFailure(RuntimeError):
     pass
+
+
+def _jar_from_cookies(site: str, cookies: Mapping[str, str]) -> CookieJar:
+    host = (urlsplit(f"//{site}").hostname or "").lower()
+    state = {
+        "cookies": [
+            {"name": str(name), "value": str(value), "domain": host, "path": "/", "expires": -1}
+            for name, value in cookies.items()
+        ]
+    }
+    return cookie_jar_for(site, state)
 
 
 def _encode_body(body: Any, body_format: str, headers: dict[str, str]) -> tuple[bytes | None, dict[str, str]]:
