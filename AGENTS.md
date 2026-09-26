@@ -121,16 +121,6 @@ changes. Never discard a dirty working tree to simplify your task.
 
 ### Demo surfaces
 
-- `src/recursive_computer_use/chatbot_app.py`
-  - Primary local Streamlit product surface for arbitrary desktop tasks.
-  - Must remain bound to loopback and use `agent.run`; never duplicate or
-    bypass sandbox, telemetry, policy, recovery, or verification logic.
-  - Must serialize desktop runs process-wide so browser sessions cannot issue
-    competing mouse and keyboard actions.
-- `src/recursive_computer_use/chat_runtime.py`
-  - Owns UI input normalization, local verifier validation, safe error text,
-    and the packaged Streamlit launcher.
-  - MongoDB credentials remain environment-only and must not enter UI state.
 - `demo/app.py`
   - Deterministic local task and verifier.
   - Must not depend on external services.
@@ -514,6 +504,9 @@ a change in someone else's file, add a line under **Requests** there.
 
 ## Editing discipline
 
+- Never add a dependency listed in `tests/test_banned.py`. The project owner
+  banned it on 2026-09-26. The test fails if its name appears anywhere in
+  the repository, including docs, config and lock files.
 - Use `rg` and `rg --files` for discovery.
 - Use patch-based edits for hand-written source and documentation.
 - Preserve unrelated changes in dirty worktrees.
