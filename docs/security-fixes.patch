@@ -1,0 +1,387 @@
+diff --git a/dashboard/app.py b/dashboard/app.py
+index f10c7e0..cf57b86 100644
+--- a/dashboard/app.py
++++ b/dashboard/app.py
+@@ -41,16 +41,20 @@ def load_data() -> tuple[dict[str, list[dict[str, Any]]], str]:
+     return json.loads(FIXTURES.read_text(encoding="utf-8")), "offline fixtures"
+ 
+ 
++def _esc(value: Any) -> str:
++    return html.escape(str(value), quote=True)
++
++
+ def metric_cards(runs: list[dict[str, Any]]) -> str:
+     cards = []
+     for run in sorted(runs, key=lambda item: item.get("policy_version", 0))[-2:]:
+         metrics = run.get("verified_metrics", {})
+         success = "PASS" if metrics.get("success_rate") else "FAIL"
+         cards.append(
+-            f"<article><h3>Policy v{run.get('policy_version','?')} <span class='{success.lower()}'>{success}</span></h3>"
+-            f"<b>{metrics.get('wrong_field_entries',0)}</b> wrong fields · "
+-            f"<b>{metrics.get('wrong_clicks',0)}</b> wrong clicks · "
+-            f"<b>{metrics.get('action_count',0)}</b> actions</article>"
++            f"<article><h3>Policy v{_esc(run.get('policy_version','?'))} <span class='{success.lower()}'>{success}</span></h3>"
++            f"<b>{_esc(metrics.get('wrong_field_entries',0))}</b> wrong fields · "
++            f"<b>{_esc(metrics.get('wrong_clicks',0))}</b> wrong clicks · "
++            f"<b>{_esc(metrics.get('action_count',0))}</b> actions</article>"
+         )
+     return "".join(cards) or "<article>No verified runs yet.</article>"
+ 
+@@ -74,8 +78,8 @@ body{{font-family:Inter,system-ui;background:#09111f;color:#ecf2ff;margin:0;padd
+ <div class='grid'>{metric_cards(data.get('runs', []))}</div>
+ <div class='flow'><div>1. Verified failure</div><div>2. Atlas memory</div><div>3. Policy candidate</div><div>4. Regression gate</div></div>
+ <div class='grid'><section><h2>Retrieved lesson</h2><p>{html.escape(str(lesson))}</p></section>
+-<section><h2>Policy diff</h2><p>v{previous.get('version','?')} → v{newest.get('version','?')}</p><p class='pass'>+ {html.escape(' | '.join(added) or 'No added rule')}</p></section>
+-<section><h2>Evaluation</h2><h3 class='{str(evaluation.get('decision','')).lower()}'>{html.escape(str(evaluation.get('decision','pending')).upper())}</h3><p>{html.escape(str(evaluation.get('reason','Awaiting a candidate trial.')))}</p><p class='{evidence_class}'>Evidence: {evidence_label}</p></section>
++<section><h2>Policy diff</h2><p>v{_esc(previous.get('version','?'))} → v{_esc(newest.get('version','?'))}</p><p class='pass'>+ {html.escape(' | '.join(added) or 'No added rule')}</p></section>
++<section><h2>Evaluation</h2><h3 class='{_esc(str(evaluation.get('decision','')).lower())}'>{html.escape(str(evaluation.get('decision','pending')).upper())}</h3><p>{html.escape(str(evaluation.get('reason','Awaiting a candidate trial.')))}</p><p class='{evidence_class}'>Evidence: {evidence_label}</p></section>
+ <section><h2>Regularization</h2><p>Next proposal budget: <b>{next_budget}</b> independent edit(s).</p><p>Task-specific literals and bundled mature-policy changes are rejected before execution.</p></section>
+ <section><h2>Privacy boundary</h2><p>Atlas receives no screenshot bytes or typed content, only redacted summaries, metrics, policies, and text selected for Atlas Automated Embedding. Selected screenshots may transit to the configured model.</p></section></div>
+ </main></body></html>"""
+@@ -84,6 +88,10 @@ body{{font-family:Inter,system-ui;background:#09111f;color:#ecf2ff;margin:0;padd
+ 
+ class Handler(BaseHTTPRequestHandler):
+     def do_GET(self) -> None:  # noqa: N802
++        # Reject DNS-rebound hosts so other sites cannot read Atlas data.
++        if self.headers.get("Host") not in {f"{HOST}:{PORT}", f"localhost:{PORT}"}:
++            self.send_error(403)
++            return
+         if self.path != "/":
+             self.send_error(404)
+             return
+diff --git a/demo/app.py b/demo/app.py
+index 9a785b3..ab02315 100644
+--- a/demo/app.py
++++ b/demo/app.py
+@@ -86,8 +86,20 @@ class Handler(BaseHTTPRequestHandler):
+             return
+         self._send(404, b"not found", "text/plain")
+ 
++    def _same_origin(self) -> bool:
++        """Block other sites and DNS-rebound hosts from forging verifier events."""
++
++        allowed = {f"{HOST}:{PORT}", f"localhost:{PORT}"}
++        if self.headers.get("Host") not in allowed:
++            return False
++        origin = self.headers.get("Origin")
++        return origin is None or origin in {f"http://{host}" for host in allowed}
++
+     def do_POST(self) -> None:  # noqa: N802
+         global STATE
++        if not self._same_origin():
++            self._send(403, b"forbidden", "text/plain")
++            return
+         if self.path == "/api/reset":
+             with LOCK:
+                 STATE = fresh_state()
+@@ -96,8 +108,16 @@ class Handler(BaseHTTPRequestHandler):
+         if self.path != "/api/event":
+             self._send(404, b"not found", "text/plain")
+             return
+-        length = min(int(self.headers.get("Content-Length", "0")), 4096)
+-        event = json.loads(self.rfile.read(length) or b"{}")
++        try:
++            length = int(self.headers.get("Content-Length", "0"))
++            if not 0 <= length <= 4096:
++                raise ValueError("bad length")
++            event = json.loads(self.rfile.read(length) or b"{}")
++            if not isinstance(event, dict):
++                raise ValueError("event must be an object")
++        except ValueError:
++            self._send(400, b"bad request", "text/plain")
++            return
+         with LOCK:
+             event_type = event.get("type")
+             if event_type == "action":
+diff --git a/src/recursive_computer_use/agent.py b/src/recursive_computer_use/agent.py
+index 8f75b91..c4f77a9 100644
+--- a/src/recursive_computer_use/agent.py
++++ b/src/recursive_computer_use/agent.py
+@@ -233,7 +233,9 @@ def run(
+             if verbose:
+                 print(f"[evolution] record failed: {exc}", file=sys.stderr)
+ 
+-    policy_text = "\n".join(f"- {rule}" for rule in policy.rules)
++    # Rules come from Atlas. Keep each to one bounded line so a stored rule
++    # cannot smuggle extra instructions into the system prompt.
++    policy_text = "\n".join(f"- {' '.join(str(rule).split())[:300]}" for rule in policy.rules)
+     messages: list[dict[str, Any]] = [
+         {
+             "role": "system",
+diff --git a/src/recursive_computer_use/evolution/runtime.py b/src/recursive_computer_use/evolution/runtime.py
+index 0e4e890..351eaf2 100644
+--- a/src/recursive_computer_use/evolution/runtime.py
++++ b/src/recursive_computer_use/evolution/runtime.py
+@@ -15,6 +15,14 @@ DEFAULT_RULES = (
+     "Use short action groups and verify visible state after each group.",
+     "Stop rather than guessing when the expected control is not visible.",
+ )
++# The only lessons the harness writes. Anything else in Atlas is untrusted
++# and never reaches a policy, because policy rules become the system prompt.
++LESSONS = {
++    "wrong_field": "Immediately before typing, inspect the screen and verify the focused field label.",
++    "wrong_click": "Immediately before clicking, inspect the screen and verify the target control.",
++    "policy_violation": "Use smaller action groups and remain within the enforced action budget.",
++    "task_failure": "After an unexpected state, inspect the screen and revise the next action instead of retrying blindly.",
++}
+ DEFAULT_LIMITS = {
+     "max_actions_without_screenshot": 3,
+     "action_budget": 40,
+@@ -132,7 +140,8 @@ class EvolutionRuntime:
+             query_text=f"{experience.summary} {experience.lesson}",
+             limit=3,
+         )
+-        learned_lessons = lessons_from(memories)
++        known = set(LESSONS.values())
++        learned_lessons = [lesson for lesson in lessons_from(memories) if lesson in known]
+         rules = list(parent.rules)
+         for lesson in learned_lessons:
+             if lesson not in rules:
+@@ -182,10 +191,7 @@ class EvolutionRuntime:
+ 
+     @staticmethod
+     def _lesson(tags: list[str]) -> str:
+-        if "wrong_field" in tags:
+-            return "Immediately before typing, inspect the screen and verify the focused field label."
+-        if "wrong_click" in tags:
+-            return "Immediately before clicking, inspect the screen and verify the target control."
+-        if "policy_violation" in tags:
+-            return "Use smaller action groups and remain within the enforced action budget."
+-        return "After an unexpected state, inspect the screen and revise the next action instead of retrying blindly."
++        for tag in ("wrong_field", "wrong_click", "policy_violation"):
++            if tag in tags:
++                return LESSONS[tag]
++        return LESSONS["task_failure"]
+diff --git a/src/recursive_computer_use/sandbox.py b/src/recursive_computer_use/sandbox.py
+index b7dc188..1b44b89 100644
+--- a/src/recursive_computer_use/sandbox.py
++++ b/src/recursive_computer_use/sandbox.py
+@@ -12,11 +12,13 @@ Observations returned to the model are a JSON string with:
+ 
+ from __future__ import annotations
+ 
++import ast
+ import base64
+ import builtins
+ import io
+ import sys
+ import traceback
++import types
+ from contextlib import redirect_stdout
+ from typing import Any, Callable
+ 
+@@ -70,6 +72,96 @@ _SAFE_IMPORTS = frozenset(
+ class PolicyViolationError(RuntimeError):
+     """Raised before an action that violates the active harness policy."""
+ 
++
++class SandboxViolationError(RuntimeError):
++    """Raised when model code reaches for interpreter internals."""
++
++
++# Builtins that expose interpreter internals or read attributes by string name.
++_BLOCKED_BUILTINS = frozenset(
++    {
++        "breakpoint", "compile", "delattr", "dir", "eval", "exec", "globals",
++        "help", "input", "locals", "memoryview", "open", "setattr", "vars",
++    }
++)
++
++
++# Public attributes that reach frames (and through them real globals), or
++# that read, write or open files through PIL.
++_BLOCKED_ATTRS = frozenset(
++    {
++        "ag_frame", "cr_frame", "f_back", "f_builtins", "f_globals", "f_locals",
++        "gi_frame", "tb_frame",
++        "load", "load_path", "open", "save", "show", "truetype",
++    }
++)
++
++# pyautogui calls that act on the desktop but bypass recording and policy.
++_UNRECORDED_ACTIONS = frozenset(
++    {
++        "drag", "dragRel", "hold", "hscroll", "keyDown", "keyUp", "leftClick",
++        "middleClick", "mouseDown", "mouseUp", "move", "moveRel", "run",
++        "tripleClick", "vscroll",
++    }
++)
++
++
++def _blocked_name(name: str) -> bool:
++    return name.startswith("_") or name in _BLOCKED_ATTRS
++
++
++def _check_source(code: str) -> None:
++    """Reject private and dunder names before the code runs.
++
++    This closes the common escapes (``obj.__globals__``, ``().__class__``,
++    ``pyautogui._pyautogui``). It is defense in depth, not an OS sandbox.
++    """
++
++    for node in ast.walk(ast.parse(code, "<model>", "exec")):
++        name = None
++        if isinstance(node, ast.Attribute):
++            name = node.attr
++        elif isinstance(node, ast.Name):
++            name = node.id
++        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
++            name = node.name
++        elif isinstance(node, ast.alias):
++            name = node.asname or node.name.rsplit(".", 1)[-1]
++        if name and _blocked_name(name):
++            raise SandboxViolationError(f"access to '{name}' is blocked by the local harness")
++
++
++def _safe_getattr(obj: Any, name: str, *default: Any) -> Any:
++    if _blocked_name(str(name)):
++        raise SandboxViolationError(f"access to '{name}' is blocked by the local harness")
++    return getattr(obj, name, *default)
++
++
++class _ModuleProxy:
++    """Expose a module without the other modules it imported (``re.enum.sys``)."""
++
++    def __init__(self, module: types.ModuleType) -> None:
++        object.__setattr__(self, "_module", module)
++
++    def __getattr__(self, name: str) -> Any:
++        return _guard_value(getattr(object.__getattribute__(self, "_module"), name))
++
++    def __setattr__(self, name: str, value: Any) -> None:
++        raise SandboxViolationError("modules are read-only in the local harness")
++
++    def __repr__(self) -> str:
++        return f"<sandboxed module {object.__getattribute__(self, '_module').__name__}>"
++
++
++def _guard_value(value: Any) -> Any:
++    if not isinstance(value, types.ModuleType):
++        return value
++    if value.__name__.split(".", 1)[0] in _SAFE_IMPORTS - {"pyautogui"}:
++        return _ModuleProxy(value)
++    raise SandboxViolationError(
++        f"module '{value.__name__}' is blocked by the local harness"
++    )
++
+ _NON_TEXT_KEYS = frozenset(
+     {
+         "alt",
+@@ -145,12 +237,18 @@ class RecordingPyAutoGUI:
+         self._actions_since_screenshot = 0
+ 
+     def __getattr__(self, name: str) -> Any:
++        if name in _UNRECORDED_ACTIONS:
++            raise PolicyViolationError(
++                f"pyautogui.{name} bypasses the harness; use {sorted(_RECORDED_ACTIONS)}"
++            )
+         target = getattr(self._pyautogui, name)
+         if name not in _RECORDED_ACTIONS or not callable(target):
+-            return target
++            return _guard_value(target)
+ 
+         def recorded(*args: Any, **kwargs: Any) -> Any:
+             if name == "screenshot":
++                if args or "imageFilename" in kwargs:
++                    raise PolicyViolationError("screenshot() may not write to a file")
+                 result = target(*args, **kwargs)
+                 self._actions_since_screenshot = 0
+                 return result
+@@ -313,9 +411,12 @@ class Sandbox:
+ 
+         self._store = store
+         self._recorder = RecordingPyAutoGUI(pyautogui_module, self._emit_action)
+-        safe_builtins = dict(vars(builtins))
+-        for dangerous in ("breakpoint", "compile", "eval", "exec", "input", "open"):
+-            safe_builtins.pop(dangerous, None)
++        safe_builtins = {
++            name: value
++            for name, value in vars(builtins).items()
++            if name not in _BLOCKED_BUILTINS
++        }
++        safe_builtins["getattr"] = _safe_getattr
+ 
+         def _safe_import(
+             name: str,
+@@ -329,12 +430,12 @@ class Sandbox:
+                 raise ImportError(f"import of '{root}' is blocked by the local harness")
+             if root == "pyautogui":
+                 return self._recorder
+-            return builtins.__import__(name, globals, locals, fromlist, level)
++            return _ModuleProxy(builtins.__import__(name, globals, locals, fromlist, level))
+ 
+         safe_builtins["__import__"] = _safe_import
+         self._ns["__builtins__"] = safe_builtins
+         self._ns["pyautogui"] = self._recorder
+-        self._ns["time"] = time
++        self._ns["time"] = _ModuleProxy(time)
+ 
+     def set_action_context(self, run_id: str | None, turn: int) -> None:
+         """Tag future desktop actions with the active run and model turn."""
+@@ -386,6 +487,7 @@ class Sandbox:
+         error: str | None = None
+ 
+         try:
++            _check_source(code)
+             with redirect_stdout(stdout_buf):
+                 exec(compile(code, "<model>", "exec"), self._ns)  # noqa: S102
+         except Exception:
+diff --git a/tests/test_recording.py b/tests/test_recording.py
+index ad543de..2547bae 100644
+--- a/tests/test_recording.py
++++ b/tests/test_recording.py
+@@ -12,6 +12,9 @@ class FakePyAutoGUI:
+     def position(self):
+         return (41, 73)
+ 
++    def screenshot(self, *args, **kwargs):
++        self.calls.append(("screenshot", args, kwargs))
++
+     def click(self, *args, **kwargs):
+         self.calls.append(("click", args, kwargs))
+         return "clicked"
+@@ -115,6 +118,31 @@ class RecordingTests(unittest.TestCase):
+         self.assertEqual(store.actions[0].turn, 2)
+         self.assertNotIn("do-not-store-me", repr(store.actions[1].args))
+ 
++    def test_sandbox_blocks_known_escapes(self):
++        sandbox = Sandbox(store=FakeStore(), pyautogui_module=FakePyAutoGUI())
++        escapes = [
++            "pyautogui._pyautogui",
++            "().__class__.__base__.__subclasses__()",
++            "getattr(log, '__glob' + 'als__')",
++            "(i for i in []).gi_frame",
++            "import json; json.codecs",
++            "import re; re.enum",
++            "pyautogui._action_budget = 10**9",
++            "from PIL import Image; Image.open('/etc/hosts')",
++            "pyautogui.screenshot().save('/tmp/x.png')",
++        ]
++        for code in escapes:
++            with self.subTest(code=code):
++                result = sandbox.run(code)
++                self.assertIn("SandboxViolationError", result["error"] or "")
++
++    def test_sandbox_blocks_unrecorded_and_file_actions(self):
++        sandbox = Sandbox(store=FakeStore(), pyautogui_module=FakePyAutoGUI())
++        for code in ("pyautogui.mouseDown()", "pyautogui.screenshot('/tmp/x.png')"):
++            with self.subTest(code=code):
++                result = sandbox.run(code)
++                self.assertIn("PolicyViolationError", result["error"] or "")
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tests/test_store.py b/tests/test_store.py
+index 89fab43..50e65e8 100644
+--- a/tests/test_store.py
++++ b/tests/test_store.py
+@@ -74,7 +74,7 @@ class StoreTests(unittest.TestCase):
+         self.assertEqual(client.database.collections["actions"].inserted[0]["kind"], "click")
+         finish = client.database.collections["runs"].updated[0][1]["$set"]
+         self.assertEqual(finish["status"], "completed")
+-        self.assertEqual(finish["final_text"], "done")
++        self.assertEqual(finish["final_summary"], "done")
+ 
+     def test_connection_failure_returns_disabled_store(self):
+         with patch(

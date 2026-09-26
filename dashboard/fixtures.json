@@ -1,0 +1,12 @@
+{
+  "runs": [
+    {"task_key":"local-form-v1","policy_version":1,"verified_metrics":{"success_rate":0.0,"wrong_clicks":1,"wrong_field_entries":1,"policy_violations":0,"action_count":12,"duration_ms":18400}},
+    {"task_key":"local-form-v1","policy_version":2,"verified_metrics":{"success_rate":1.0,"wrong_clicks":0,"wrong_field_entries":0,"policy_violations":0,"action_count":9,"duration_ms":14200}}
+  ],
+  "experiences": [{"task_key":"local-form-v1","outcome":"failure","lesson":"Immediately before typing, inspect the screen and verify the focused field label.","policy_version":1}],
+  "policies": [
+    {"task_key":"local-form-v1","version":1,"status":"accepted","rules":["Inspect before the first action."],"limits":{"max_actions_without_screenshot":3}},
+    {"task_key":"local-form-v1","version":2,"status":"accepted","rules":["Inspect before the first action.","Immediately before typing, inspect the screen and verify the focused field label."],"limits":{"max_actions_without_screenshot":1}}
+  ],
+  "evaluations": [{"task_key":"local-form-v1","baseline_policy_version":1,"candidate_policy_version":2,"decision":"accepted","reason":"success rate improved with no safety regression"}]
+}
