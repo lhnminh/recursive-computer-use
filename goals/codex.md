@@ -18,20 +18,20 @@ Until N1 is pushed, write against the JSON shape in `GOALS.md` and import
 The form now trusts the browser's `submit` event. A replay could fake
 success. Move the decision to the server.
 
-- [ ] `GET /api/session` → `{"csrf": "<random>"}` and a `sid` cookie.
-- [ ] `POST /api/checkin` with JSON `{full_name, email, city}` and header
+- [x] `GET /api/session` → `{"csrf": "<random>"}` and a `sid` cookie.
+- [x] `POST /api/checkin` with JSON `{full_name, email, city}` and header
       `X-CSRF-Token`. The server checks csrf + sid and the values, then sets
       `success`. Wrong csrf → 403.
-- [ ] The page's JS uses these two endpoints, so a recording captures them.
-- [ ] Keep `/api/result` and `/api/reset` as they are. Keep the event
+- [x] The page's JS uses these two endpoints, so a recording captures them.
+- [x] Keep `/api/result` and `/api/reset` as they are. Keep the event
       metrics for the computer-use path.
-- [ ] Accept any guest, not only Ada: the page shows the expected values
+- [x] Accept any guest, not only Ada: the page shows the expected values
       per reset (`POST /api/reset {"guest": {...}}` sets them). So a replay
       with new params is a real test.
-- [ ] Redesign switch: `POST /api/redesign {"on": true}` moves the call to
+- [x] Redesign switch: `POST /api/redesign {"on": true}` moves the call to
       `POST /api/v2/check-in`, renames `full_name` → `name`, and the old
       endpoint returns 410. The page's JS follows the switch.
-- [ ] Tests in `tests/test_demo_api.py`.
+- [x] Tests in `tests/test_demo_api.py`.
 
 ## X7. Capture (~45 min)
 
