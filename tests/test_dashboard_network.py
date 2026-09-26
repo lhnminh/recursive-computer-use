@@ -48,6 +48,39 @@ class NetworkDashboardTests(unittest.TestCase):
         self.assertIn("14000 ms", body)
         self.assertIn("Recent runs", body)
 
+    def test_missing_verifier_metrics_are_not_displayed_as_verified_failure(self):
+        cards = app.metric_cards([
+            {"status": "failed", "policy_version": None, "verified_metrics": None},
+            {"status": "running", "verified_metrics": None},
+        ])
+        self.assertIn("Desktop run", cards)
+        self.assertIn("FAILED · UNVERIFIED", cards)
+        self.assertIn("IN PROGRESS", cards)
+        self.assertIn("No verifier metrics recorded", cards)
+        self.assertNotIn("Policy v?", cards)
+
+    def test_empty_policy_evaluation_is_not_shown_as_pending_or_unsealed(self):
+        data = {
+            "runs": [],
+            "experiences": [],
+            "policies": [{"version": 1, "status": "accepted", "rules": []}],
+            "evaluations": [],
+            "learning_curve": [],
+            "lineage": [],
+            "top_lessons": [],
+            "skills": [],
+            "recipes": [],
+            "site_map": [],
+            "episodes": [],
+        }
+        with patch.object(app, "load_data", return_value=(data, "test fixture")):
+            body = app.render().decode()
+        self.assertIn("Baseline v1; no candidate policy change yet.", body)
+        self.assertIn("NO EVALUATION", body)
+        self.assertIn("NO EVIDENCE", body)
+        self.assertNotIn("UNSEALED", body)
+        self.assertNotIn("PENDING", body)
+
 
 if __name__ == "__main__":
     unittest.main()

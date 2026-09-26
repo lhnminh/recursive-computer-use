@@ -18,7 +18,8 @@ from recursive_computer_use.evolution import (
 )
 
 
-HOST, PORT = "127.0.0.1", 8787
+HOST = os.environ.get("RCU_DASHBOARD_HOST", "127.0.0.1")
+PORT = int(os.environ.get("RCU_DASHBOARD_PORT", "8787"))
 FIXTURES = Path(__file__).with_name("fixtures.json")
 
 
@@ -68,9 +69,10 @@ def load_data(query_text: str = "") -> tuple[dict[str, Any], str]:
             db = client[os.environ.get("MONGODB_DB", "recursive_computer_use")]
             data: dict[str, Any] = {}
             for name in ("runs", "experiences", "policies", "evaluations"):
+                sort_field = "started_at" if name == "runs" else "created_at"
                 data[name] = list(
                     db[name].find({}, {"_id": 0, "embedding": 0})
-                    .sort("created_at", -1)
+                    .sort(sort_field, -1)
                     .limit(20)
                 )
             data["recipes"] = list(
@@ -172,16 +174,29 @@ def _esc(value: Any) -> str:
 
 def metric_cards(runs: list[dict[str, Any]]) -> str:
     cards = []
-    for run in sorted(runs, key=lambda item: item.get("policy_version", 0))[-2:]:
+    for run in runs[:2]:
         metrics = run.get("verified_metrics", {})
-        success = "PASS" if metrics.get("success_rate") else "FAIL"
+        if metrics and "success_rate" in metrics:
+            verdict = "PASS" if float(metrics.get("success_rate") or 0) > 0 else "FAIL"
+            summary = (
+                f"<b>{_esc(metrics.get('wrong_field_entries',0))}</b> wrong fields · "
+                f"<b>{_esc(metrics.get('wrong_clicks',0))}</b> wrong clicks · "
+                f"<b>{_esc(metrics.get('action_count',0))}</b> actions"
+            )
+        else:
+            verdict = {
+                "running": "IN PROGRESS",
+                "failed": "FAILED · UNVERIFIED",
+                "interrupted": "INTERRUPTED",
+            }.get(run.get("status"), "UNVERIFIED")
+            summary = "No verifier metrics recorded for this run."
+        version = run.get("policy_version")
+        heading = f"Policy v{_esc(version)}" if version is not None else "Desktop run"
         cards.append(
-            f"<article><h3>Policy v{_esc(run.get('policy_version','?'))} <span class='{success.lower()}'>{success}</span></h3>"
-            f"<b>{_esc(metrics.get('wrong_field_entries',0))}</b> wrong fields · "
-            f"<b>{_esc(metrics.get('wrong_clicks',0))}</b> wrong clicks · "
-            f"<b>{_esc(metrics.get('action_count',0))}</b> actions</article>"
+            f"<article><h3>{heading} <span class='muted'>{_esc(verdict)}</span></h3>"
+            f"<p>{summary}</p></article>"
         )
-    return "".join(cards) or "<article>No verified runs yet.</article>"
+    return "".join(cards) or "<article>No desktop runs yet.</article>"
 
 
 def render(query_text: str = "") -> bytes:
@@ -192,8 +207,9 @@ def render(query_text: str = "") -> bytes:
     added = [rule for rule in newest.get("rules", []) if rule not in previous.get("rules", [])]
     lesson = (data.get("experiences") or [{}])[0].get("lesson", "No memory recorded")
     evaluation = (data.get("evaluations") or [{}])[0]
-    evidence_sealed = verify_evaluation_evidence(evaluation)
-    evidence_label = "VERIFIED" if evidence_sealed else "UNSEALED"
+    has_evaluation = bool(data.get("evaluations"))
+    evidence_sealed = verify_evaluation_evidence(evaluation) if has_evaluation else False
+    evidence_label = "VERIFIED" if evidence_sealed else ("UNSEALED" if has_evaluation else "NO EVIDENCE")
     evidence_class = "pass" if evidence_sealed else "muted"
     next_budget = annealed_edit_budget(int(newest.get("version", 1) or 1))
     curve_rows = "".join(
@@ -252,6 +268,24 @@ def render(query_text: str = "") -> bytes:
         f"<td>{sum(int(e.get('llm_calls') or 0) for e in items) / len(items):.1f}</td></tr>"
         for mode, items in sorted(mode_totals.items()) if items
     ) or "<tr><td colspan='4'>No mode comparison yet.</td></tr>"
+    policy_diff = (
+        f"<p>v{_esc(previous.get('version','?'))} → v{_esc(newest.get('version','?'))}</p>"
+        f"<p class='pass'>+ {html.escape(' | '.join(added) or 'No added rule')}</p>"
+        if previous
+        else (
+            f"<p>Baseline v{_esc(newest.get('version','?'))}; no candidate policy change yet.</p>"
+            if newest
+            else "<p>No policy versions recorded yet.</p>"
+        )
+    )
+    if has_evaluation:
+        evaluation_panel = (
+            f"<h3 class='{_esc(str(evaluation.get('decision','')).lower())}'>{html.escape(str(evaluation.get('decision','pending')).upper())}</h3>"
+            f"<p>{html.escape(str(evaluation.get('reason','Awaiting a candidate trial.')))}</p>"
+            f"<p class='{evidence_class}'>Evidence: {evidence_label}</p>"
+        )
+    else:
+        evaluation_panel = "<h3 class='muted'>NO EVALUATION</h3><p>No candidate policy evaluation has been recorded.</p><p class='muted'>Evidence: NO EVIDENCE</p>"
     body = f"""<!doctype html><html><head><meta charset='utf-8'><meta http-equiv='refresh' content='5'>
 <title>Recursive Harness</title><style>
 body{{font-family:Inter,system-ui;background:#09111f;color:#ecf2ff;margin:0;padding:36px}}main{{max-width:1050px;margin:auto}}h1{{font-size:42px;margin-bottom:4px}}.muted{{color:#94a3b8}}.grid{{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:26px 0}}article,section{{background:#111c31;border:1px solid #293854;border-radius:8px;padding:22px}}.pass{{color:#4ade80}}.fail{{color:#fb7185}}.flow{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}}.flow div{{background:#182641;border-radius:8px;padding:15px}}table{{width:100%;border-collapse:collapse;text-align:left}}th,td{{padding:8px;border-bottom:1px solid #293854}}input,button{{font:inherit;padding:7px}}ol{{padding-left:22px}}li{{margin:10px 0}}@media(max-width:800px){{.grid,.flow{{grid-template-columns:1fr}}}}
@@ -259,8 +293,8 @@ body{{font-family:Inter,system-ui;background:#09111f;color:#ecf2ff;margin:0;padd
 <div class='grid'>{metric_cards(data.get('runs', []))}</div>
 <div class='flow'><div>1. Verified failure</div><div>2. Atlas memory</div><div>3. Policy candidate</div><div>4. Regression gate</div></div>
 <div class='grid'><section><h2>Retrieved lesson</h2><p>{html.escape(str(lesson))}</p></section>
-<section><h2>Policy diff</h2><p>v{_esc(previous.get('version','?'))} → v{_esc(newest.get('version','?'))}</p><p class='pass'>+ {html.escape(' | '.join(added) or 'No added rule')}</p></section>
-<section><h2>Evaluation</h2><h3 class='{_esc(str(evaluation.get('decision','')).lower())}'>{html.escape(str(evaluation.get('decision','pending')).upper())}</h3><p>{html.escape(str(evaluation.get('reason','Awaiting a candidate trial.')))}</p><p class='{evidence_class}'>Evidence: {evidence_label}</p></section>
+<section><h2>Policy diff</h2>{policy_diff}</section>
+<section><h2>Evaluation</h2>{evaluation_panel}</section>
 <section><h2>Top lessons</h2><form method='get'><label for='q'>Query</label> <input id='q' name='q' value='{html.escape(query_text, quote=True)}'><button type='submit'>Search</button></form><ol>{lesson_rows}</ol></section>
 <section><h2>Regularization</h2><p>Next proposal budget: <b>{next_budget}</b> independent edit(s).</p><p>Task-specific literals and bundled mature-policy changes are rejected before execution.</p></section>
 <section><h2>Privacy boundary</h2><p>Atlas receives no screenshot bytes or typed content, only redacted summaries, metrics, policies, and text selected for Atlas Automated Embedding. Selected screenshots may transit to the configured model.</p></section></div>
