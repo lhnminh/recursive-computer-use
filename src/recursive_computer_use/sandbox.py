@@ -198,6 +198,13 @@ class Sandbox:
         self._ns["pyautogui"] = _RecordingPyAutoGUI(pyautogui, self._record_action)
         self._ns["time"] = time
 
+        # Accessibility element grounding (macOS): elements(), click_element(),
+        # focused_element(). Clicks go through the recording proxy, so guide
+        # capture records them like pixel clicks.
+        from .elements import make_helpers
+
+        self._ns.update(make_helpers(self._ns["pyautogui"]))
+
     def _record_action(self, kind: str, args: tuple, kwargs: dict) -> None:
         """Callback invoked by the recording proxy before each action fires."""
         x, y = self._resolve_xy(kind, args, kwargs)

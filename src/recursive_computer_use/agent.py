@@ -123,7 +123,14 @@ EXEC_PY_TOOL: dict[str, Any] = {
             "buttons, or other window-management actions to navigate or recover. "
             "Before each call, briefly state what you observe and what you will do next. "
             "Always inspect the screen first with display(pyautogui.screenshot()) before "
-            "taking any action, then verify after each short group of actions."
+            "taking any action, then verify after each short group of actions. "
+            "Element helpers (macOS): elements() prints the frontmost app's clickable "
+            "controls as IDs like e7 with role, label, value and focus; "
+            "click_element('e7') clicks that exact control; focused_element() re-reads "
+            "which control has keyboard focus. Prefer these IDs over pixel coordinates. "
+            "Each elements() or focused_element() call refreshes the list and replaces "
+            "all IDs. Check focused_element() before typing, because focus can move. "
+            "On other platforms, use screenshots and pixel coordinates."
         ),
         "parameters": {
             "type": "object",
