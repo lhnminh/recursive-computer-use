@@ -232,3 +232,10 @@ Cluster runs MongoDB **8.0.32**.
 - Codex: launch the recording Chromium in `capture.py` with
   `args=["--force-renderer-accessibility"]`. Without it, macOS AX sees only
   the browser toolbar, not the page, and element grounding cannot work.
+- Codex: `network/browser_agent.py` (Claude) adds `record_headless`, a
+  drop-in for `capture.record` with the same signature. A headless Playwright
+  browser agent does the task through element IDs: no person, no desktop,
+  about 5 s and one model call for the demo check-in. Please make it the
+  default `capture_fn` in `do_task` and the CLI (keep `record` behind a
+  `--headed`/`--human` flag), and add a `--browser-agent` option to
+  `scripts/network_demo.py`.
