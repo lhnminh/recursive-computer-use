@@ -10,9 +10,8 @@ model reasoning — which is dramatically faster.
 Storage is two-tier (see fast-web-browsing-design.md):
 
   * **MongoDB primary** — shared source of truth when reachable.
-  * **Local JSON fallback** — ``~/.recursive_computer_use/guides.json``. Always
-    kept as a warm write-through copy, so the fast path keeps working even when
-    MongoDB is down.
+  * **Local JSON fallback** — ``~/.recursive_computer_use/guides.json``. Keeps a
+    local copy of captured guides when MongoDB is unavailable.
 
 Everything here is **non-fatal**: a persistence failure must never break a
 desktop session. If both tiers fail, the store degrades to in-memory / no-op and
@@ -120,7 +119,7 @@ class Step:
     """One replayable action in a guide."""
 
     seq: int
-    kind: str  # click | doubleClick | rightClick | write | press | hotkey | scroll | moveTo
+    kind: str  # launch_app | click | doubleClick | rightClick | write | press | hotkey | scroll | moveTo
     x: int | None = None
     y: int | None = None
     nx: float | None = None  # normalized x (x / screen_width) — future-proofing
@@ -131,6 +130,7 @@ class Step:
     description: str | None = None
     checkpoint: bool = False  # verify before firing this step
     screenshot_ref: str | None = None
+    parameter: str | None = None  # prompt-supplied value, e.g. navigation_url or prompt_text
 
     def to_doc(self) -> dict[str, Any]:
         return asdict(self)

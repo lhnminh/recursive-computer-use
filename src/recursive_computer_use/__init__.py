@@ -28,8 +28,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="gpt-5.6-sol",
-        help="Model to use (default: gpt-5.6-sol). Available via proxy: gpt-5.5, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6-astra.",
+        default="gpt-5.6-terra",
+        help="Model to use (default: gpt-5.6-terra). Available via proxy: gpt-5.5, gpt-5.6-terra, gpt-5.6-luna, gpt-6-astra.",
     )
     parser.add_argument(
         "--verbose", "-v",
@@ -44,12 +44,12 @@ def main() -> None:
     parser.add_argument(
         "--guides",
         action="store_true",
-        help="Enable experimental guide capture and blind replay (may be unreliable).",
+        help="Capture a guide after a successful run.",
     )
     parser.add_argument(
-        "--relearn",
+        "--replay-guides",
         action="store_true",
-        help="Force a fresh free-navigation run and overwrite the stored guide.",
+        help="Replay a saved guide, filling its site and requested text from the prompt.",
     )
     parser.add_argument(
         "--site",
@@ -72,7 +72,7 @@ def main() -> None:
             model=args.model,
             verbose=args.verbose,
             use_guides=args.guides and not args.no_guides,
-            relearn=args.relearn,
+            replay_guides=args.replay_guides and not args.no_guides,
             site=args.site,
             task=args.task,
         )

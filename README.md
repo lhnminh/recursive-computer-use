@@ -35,9 +35,10 @@ Choose a model with `--model`:
 uv run recursive-computer-use --model gpt-6-astra "click the search box and type hello"
 ```
 
-Available models (via proxy): `gpt-5.6-sol` (default), `gpt-5.5`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`.
+Available models (via proxy): `gpt-5.6-terra` (default), `gpt-5.5`, `gpt-5.6-luna`, `gpt-6-astra`.
 
-Coordinate guide replay is experimental and disabled by default because page
-changes can make captured clicks unreliable. Use `--guides` to opt in; use
-`--relearn` to force free navigation and replace a guide, or `--no-guides` to
-disable guide lookup and capture explicitly.
+Guide capture is disabled by default. Use `--guides` to save the actions from a
+successful run. Private LinkedIn text is stored as a placeholder. Use
+`--replay-guides` to replay a matching guide, filling the site and requested
+text from the current prompt; without that flag, runs use screenshot-guided
+navigation.

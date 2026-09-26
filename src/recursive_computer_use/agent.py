@@ -46,10 +46,28 @@ Work in short steps: inspect the current screen first, perform only a small
 group of actions, wait for the page to update, then inspect again. Use the
 visible interface as evidence; do not assume a click worked. If navigation or a
 control is unclear, take another screenshot and recover from the current screen.
-When opening a website, put its address in the browser address bar: focus the
-bar with the platform's address-bar shortcut (Command+L on macOS, Ctrl+L on
-Windows/Linux), type the URL, press Enter, wait, and inspect a fresh screenshot
-to confirm the destination loaded. Never type a URL into a webpage text field.
+After launching the required app, navigate to a requested website in a new tab
+while preserving the current tab (Command+T on macOS, Ctrl+T on Windows/Linux).
+Then focus the new tab's address bar with Command+L on macOS or Ctrl+L on
+Windows/Linux, type the URL, press Enter, wait, and inspect a fresh screenshot
+to confirm the destination loaded. Do this even if another site is already
+open. Never type a URL into a webpage text field.
+The sandbox provides `default_browser`, detected from the operating system, and
+`launch_app(app_name)`, which directly opens a named app without closing other
+apps. After the initial screenshot, identify the app required by the task and
+make `launch_app(app_name)` your first desktop action, even if its window might
+already be open. For a website task, call `launch_app("default_browser")`. Wait
+and inspect a screenshot to confirm the app's window before continuing. This
+launch call is captured as the first guide step; the harness does not insert it.
+A ChatGPT window is not a browser window, even if it can display web content;
+do not type the URL into ChatGPT.
+Do not use Command+Tab, shell commands, AppleScript, or guessed coordinates to
+launch or find apps. Do not press Command+M or another minimize shortcut to try
+to reveal the browser; minimizing the current window hides it.
+Never close, quit, minimize, or dismiss the terminal or app that launched this
+task. Leave unrelated windows open. Do not use Command+Q, window close buttons,
+or other window-management actions as a navigation or recovery method. Complete
+the requested task using the browser while keeping the launching terminal open.
 If the address bar is not available, use only a visibly identified browser
 address bar; do not guess at a page field. If text appears in the wrong place,
 stop typing, inspect the screen, and recover by focusing the address bar.
@@ -66,7 +84,7 @@ when a draft is left open for review."""
 
 # Kinds we treat as replayable / worth capturing into a guide.
 _MEANINGFUL_KINDS = {
-    "click", "doubleClick", "rightClick", "write", "typewrite",
+    "launch_app", "click", "doubleClick", "rightClick", "write", "typewrite",
     "press", "hotkey", "scroll", "moveTo", "dragTo",
 }
 
@@ -79,13 +97,29 @@ EXEC_PY_TOOL: dict[str, Any] = {
             "Run Python in a persistent desktop environment. "
             "Variables and imports persist across calls within the same session. "
             "Pre-imported: pyautogui, time. "
+            "default_browser is the OS-reported browser name; "
+            "launch_app(app_name) directly opens the named app on macOS. "
             "Helpers: log(value) to print text, display(pil_image) to attach a screenshot. "
             "Screenshots passed to display() are resized to match pyautogui.size(), "
             "so screenshot coordinates match click coordinates. "
-            "For website navigation, focus the browser address bar with Command+L "
-            "on macOS or Ctrl+L on Windows/Linux, enter the URL, press Enter, "
-            "then inspect a screenshot to confirm the page loaded. Never type a "
-            "URL into a webpage text field. "
+            "Inspect the screen first. After the initial screenshot, call "
+            "launch_app(app_name) as the first desktop action, even if the app "
+            "might already be open. For a website task use "
+            "launch_app(\"default_browser\"). Wait and inspect a screenshot to "
+            "confirm the app window. That call becomes the first guide step; "
+            "the harness does not insert it. For a requested website, preserve "
+            "the current tab and open a new tab with Command+T on macOS or Ctrl+T "
+            "on Windows/Linux. Then focus the new tab's address bar with "
+            "Command+L or Ctrl+L, enter the URL, press Enter, and inspect a "
+            "screenshot to confirm the page loaded. Never type a URL into a "
+            "webpage text field. If "
+            "default_browser is unknown or launch fails, inspect the Dock for a "
+            "visible browser. Do not use Command+Tab, shell commands, or AppleScript "
+            "to launch or find apps, and do not press Command+M to reveal a browser. "
+            "A ChatGPT window is not a browser window; do not type the URL there. Never "
+            "close, quit, minimize, or dismiss the terminal or app that launched "
+            "this task. Leave unrelated windows open; do not use Command+Q, close "
+            "buttons, or other window-management actions to navigate or recover. "
             "Before each call, briefly state what you observe and what you will do next. "
             "Always inspect the screen first with display(pyautogui.screenshot()) before "
             "taking any action, then verify after each short group of actions."
@@ -125,12 +159,12 @@ def _check_proxy(base_url: str) -> None:
 def run(
     prompt: str,
     *,
-    model: str = "gpt-5.6-sol",
+    model: str = "gpt-5.6-terra",
     verbose: bool = False,
     site: str | None = None,
     task: str | None = None,
     use_guides: bool = False,
-    relearn: bool = False,
+    replay_guides: bool = False,
     guide_store: GuideStore | None = None,
 ) -> str:
     """
@@ -141,17 +175,16 @@ def run(
     prompt:
         Natural-language description of the task to complete.
     model:
-        Model to use. Defaults to ``gpt-5.6-sol`` (available via Codex proxy).
+        Model to use. Defaults to ``gpt-5.6-terra`` (available via Codex proxy).
     verbose:
         Print turn-by-turn activity to stderr.
     site, task:
         Optional ``(site, task)`` key for guide lookup/capture. When omitted,
         they are inferred from *prompt* (see :func:`infer_site_task`).
     use_guides:
-        When True, consult the guide store for a fast-path replay and
-        record a new guide on a successful free-navigation run.
-    relearn:
-        Force a fresh free-navigation run and overwrite any stored guide.
+        When True, record a guide from a successful free-navigation run.
+    replay_guides:
+        When True, attempt to replay a matching saved guide before navigation.
     guide_store:
         Optional pre-built :class:`GuideStore`. When omitted, a local-only
         store is opened (MongoDB wiring is layered in separately).
@@ -182,34 +215,32 @@ def run(
     env = detect_env()
 
     store = guide_store
-    if use_guides and store is None:
+    if (use_guides or replay_guides) and store is None:
         store = GuideStore.open(None, verbose=verbose)  # local-only by default
 
     is_linkedin = _is_linkedin_workflow(site, task)
     guide_task = _guide_task_key(site, task)
 
-    # -- Fast path: replay a matching guide if we have one -----------------
-    if use_guides and store is not None and not relearn and site and guide_task:
+    if replay_guides and store is not None and site and guide_task:
         guide = store.find_guide(site, guide_task, env.fingerprint)
         if guide is not None and guide.steps:
             if verbose:
-                print(f"[guide] HIT for ({site!r}, {task!r}) @ {env.fingerprint} "
-                      f"— {len(guide.steps)} step(s); attempting fast path",
-                      file=sys.stderr)
-            ok, final_text = _fast_path(sandbox, guide, verbose=verbose)
+                print(f"[guide] replaying {len(guide.steps)} saved step(s) for "
+                      f"({site!r}, {guide_task!r})", file=sys.stderr)
+            ok, final_text = _fast_path(
+                sandbox, guide, site=site, prompt=prompt, verbose=verbose
+            )
             store.bump_guide_stats(site, guide_task, env.fingerprint, ok=ok)
             if ok:
-                if verbose:
-                    print("[guide] fast path succeeded", file=sys.stderr)
                 return final_text
             if verbose:
-                print("[guide] fast path checkpoint failed — falling back to "
-                      "free navigation", file=sys.stderr)
+                print("[guide] replay failed; falling back to screenshot-guided "
+                      "navigation", file=sys.stderr)
         elif verbose:
-            print(f"[guide] MISS for ({site!r}, {task!r}) @ {env.fingerprint} "
-                  "— free navigation", file=sys.stderr)
+            print(f"[guide] no saved guide for ({site!r}, {guide_task!r}); "
+                  "using screenshot-guided navigation", file=sys.stderr)
 
-    # -- Free navigation: the model drives via screenshots + reasoning -----
+    # Screenshot-guided navigation is the default and replay fallback.
     final_text = _free_navigation(client, sandbox, prompt, model=model, verbose=verbose)
 
     # -- Learn: distill the successful run into a coordinate guide ---------
@@ -250,7 +281,14 @@ def _free_navigation(
 ) -> str:
     """The original slow loop: model looks, reasons, acts, repeats."""
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "system",
+            "content": (
+                f"{SYSTEM_PROMPT}\n\n"
+                f"The operating system reports {sandbox.default_browser!r} "
+                "as the default browser. Use that app when opening websites."
+            ),
+        },
         {"role": "user", "content": prompt},
     ]
 
@@ -341,27 +379,85 @@ def _free_navigation(
     raise RuntimeError("Agentic loop exited unexpectedly.")
 
 
-def _fast_path(sandbox: Sandbox, guide: Guide, *, verbose: bool) -> tuple[bool, str]:
-    """
-    Replay a guide's steps directly via pyautogui — no screenshots, no model.
-
-    Returns ``(ok, final_text)``. ``ok`` is False if replay raised, so the
-    caller can fall back to free navigation.
-
-    NOTE: checkpoint verification (URL/title checks) is a planned enhancement
-    (design G4). For now the fast path fires steps blind with small pauses; a
-    replay exception is the failure signal.
-    """
+def _fast_path(
+    sandbox: Sandbox,
+    guide: Guide,
+    *,
+    site: str,
+    prompt: str,
+    verbose: bool,
+) -> tuple[bool, str]:
+    """Replay a guide, filling redacted values from the current prompt."""
     lines = ["import pyautogui, time"]
+    url = site.rstrip("/")
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+    prompt_text = _extract_prompt_text(prompt)
+
+    # Older guides have no parameter labels. Treat the final blank text entry
+    # after address-bar navigation as the prompt-supplied content.
+    legacy_prompt_step = None
+    address_bar_focused = False
+    waiting_for_navigation = False
+    page_navigated = False
     for step in guide.steps:
-        lines.append(_replay_line(step))
+        if step.kind == "hotkey":
+            keys = step.args if isinstance(step.args, list) else []
+            normalized = {str(key).lower() for key in keys}
+            address_bar_focused = (
+                ("command" in normalized and "l" in normalized)
+                or (("ctrl" in normalized or "control" in normalized)
+                    and "l" in normalized)
+            )
+        elif address_bar_focused and step.kind in ("write", "typewrite"):
+            address_bar_focused = False
+            waiting_for_navigation = True
+        elif waiting_for_navigation and step.kind == "press":
+            waiting_for_navigation = False
+            page_navigated = True
+        elif page_navigated and step.kind in ("write", "typewrite") and step.text is None:
+            legacy_prompt_step = step.seq
+    prompt_step = max(
+        (step.seq for step in guide.steps if step.parameter == "prompt_text"),
+        default=legacy_prompt_step,
+    )
+
+    address_bar_focused = False
+    navigation_url_entered = False
+    for step in guide.steps:
+        if step.kind == "hotkey":
+            keys = step.args if isinstance(step.args, list) else []
+            normalized = {str(key).lower() for key in keys}
+            is_address_shortcut = (
+                ("command" in normalized and "l" in normalized)
+                or (("ctrl" in normalized or "control" in normalized)
+                    and "l" in normalized)
+            )
+            lines.append(_replay_line(step))
+            address_bar_focused = is_address_shortcut
+        elif (step.parameter == "navigation_url"
+              or address_bar_focused and step.kind in ("write", "typewrite")):
+            lines.append(
+                f"pyautogui.write({url!r})"
+                if step.parameter == "navigation_url" or step.text is None
+                else _replay_line(step)
+            )
+            navigation_url_entered = step.parameter == "navigation_url" or step.text is None
+            address_bar_focused = False
+        elif navigation_url_entered and step.kind == "press" and step.text is None:
+            lines.append("pyautogui.press('enter')")
+            # LinkedIn needs longer than the normal inter-action pause to load.
+            lines.append("time.sleep(5.0)")
+            navigation_url_entered = False
+            continue
+        elif step.seq == prompt_step:
+            lines.append(
+                f"pyautogui.write({prompt_text!r})" if prompt_text else "pass"
+            )
+        else:
+            lines.append(_replay_line(step))
         lines.append("time.sleep(0.4)")
-    code = "\n".join(lines)
-
-    if verbose:
-        print(f"[guide] replaying {len(guide.steps)} step(s) fast", file=sys.stderr)
-
-    result = sandbox.run(code)
+    result = sandbox.run("\n".join(lines))
     if result.get("error"):
         if verbose:
             print(f"  replay error: {result['error'].splitlines()[-1]}",
@@ -372,25 +468,45 @@ def _fast_path(sandbox: Sandbox, guide: Guide, *, verbose: bool) -> tuple[bool, 
 
 def _replay_line(step: Step) -> str:
     """Render one guide step as a pyautogui call for replay."""
-    k = step.kind
-    if k in ("click", "doubleClick", "rightClick", "moveTo"):
+    kind = step.kind
+    if kind == "launch_app":
+        return f"launch_app({(step.text or 'default_browser')!r})"
+    if kind in ("click", "doubleClick", "rightClick", "moveTo"):
         if step.x is not None and step.y is not None:
-            return f"pyautogui.{k}({step.x}, {step.y})"
-        return f"pyautogui.{k}()"
-    if k in ("write", "typewrite"):
+            return f"pyautogui.{kind}({step.x}, {step.y})"
+        return f"pyautogui.{kind}()"
+    if kind in ("write", "typewrite"):
         return f"pyautogui.write({step.text!r})" if step.text else "pass"
-    if k == "press":
+    if kind == "press":
         return f"pyautogui.press({step.text!r})" if step.text else "pass"
-    if k == "hotkey":
+    if kind == "hotkey":
         keys = step.args or ([] if step.text is None else [step.text])
-        return "pyautogui.hotkey(" + ", ".join(repr(x) for x in keys) + ")"
-    if k == "scroll":
+        return "pyautogui.hotkey(" + ", ".join(repr(key) for key in keys) + ")"
+    if kind == "scroll":
         amount = step.args[0] if step.args else 0
         return f"pyautogui.scroll({amount})"
-    if k == "dragTo":
-        if step.x is not None and step.y is not None:
-            return f"pyautogui.dragTo({step.x}, {step.y})"
+    if kind == "dragTo" and step.x is not None and step.y is not None:
+        return f"pyautogui.dragTo({step.x}, {step.y})"
     return "pass"
+
+
+def _extract_prompt_text(prompt: str) -> str | None:
+    """Extract explicitly requested content from a task prompt, if present."""
+    import re
+
+    quoted = re.search(
+        r"\b(?:saying|that says|with the text|with text|text:?)\s*[\"'“‘](.+?)[\"'”’]",
+        prompt,
+        re.IGNORECASE,
+    )
+    if quoted:
+        return quoted.group(1).strip() or None
+    unquoted = re.search(
+        r"\b(?:saying|that says|with the text|with text|text:)\s+(.+?)\s*[.!?]*$",
+        prompt,
+        re.IGNORECASE,
+    )
+    return unquoted.group(1).strip() if unquoted else None
 
 
 def _distill_steps(sandbox: Sandbox, env, *, include_text: bool = True) -> list[Step]:
@@ -405,6 +521,7 @@ def _distill_steps(sandbox: Sandbox, env, *, include_text: bool = True) -> list[
     seq = 0
     w = env.screen_width or 1
     h = env.screen_height or 1
+    address_bar_focused = False
     for act in sandbox.captured_actions:
         kind = act.get("kind")
         if kind not in _MEANINGFUL_KINDS:
@@ -413,16 +530,30 @@ def _distill_steps(sandbox: Sandbox, env, *, include_text: bool = True) -> list[
         x = act.get("x")
         y = act.get("y")
         text = None
+        parameter = None
         args = act.get("args") or []
-        if include_text and kind in ("write", "typewrite", "press") and args:
+        if kind == "hotkey":
+            normalized = {str(key).lower() for key in args}
+            address_bar_focused = (
+                ("command" in normalized and "l" in normalized)
+                or (("ctrl" in normalized or "control" in normalized)
+                    and "l" in normalized)
+            )
+        if kind == "launch_app" and args:
             text = args[0] if isinstance(args[0], str) else None
+        elif include_text and kind in ("write", "typewrite", "press") and args:
+            text = args[0] if isinstance(args[0], str) else None
+        elif not include_text and kind in ("write", "typewrite") and args:
+            parameter = "navigation_url" if address_bar_focused else "prompt_text"
+        if kind in ("write", "typewrite"):
+            address_bar_focused = False
         nx = round(x / w, 4) if isinstance(x, (int, float)) and kind not in ("scroll",) else None
         ny = round(y / h, 4) if isinstance(y, (int, float)) and kind not in ("scroll",) else None
         steps.append(Step(
             seq=seq, kind=kind,
             x=x if kind not in ("scroll",) else None,
             y=y if kind not in ("scroll",) else None,
-            nx=nx, ny=ny, text=text,
+            nx=nx, ny=ny, text=text, parameter=parameter,
             args=args if kind in ("hotkey", "scroll") else {},
             checkpoint=(seq == 1),  # verify the first step later (G4)
         ))

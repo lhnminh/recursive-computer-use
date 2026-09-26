@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import io
+import subprocess
 import sys
 import traceback
 from contextlib import redirect_stdout
@@ -42,6 +43,26 @@ def _pil_to_base64(image: Any) -> str:
     image.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
     return f"data:image/png;base64,{b64}"
+
+
+def _detect_default_browser() -> tuple[str, str | None]:
+    """Return the OS default browser name and app path when discoverable."""
+    if sys.platform != "darwin":
+        return "unknown", None
+    try:
+        from AppKit import NSWorkspace
+        from Foundation import NSURL
+
+        url = NSURL.URLWithString_("https://example.com")
+        app_url = NSWorkspace.sharedWorkspace().URLForApplicationToOpenURL_(url)
+        if app_url is not None:
+            app_path = str(app_url.path())
+            name = str(app_url.lastPathComponent())
+            name = name[:-4] if name.lower().endswith(".app") else name
+            return name, app_path
+    except Exception:  # noqa: BLE001 — browser discovery must not block a session
+        pass
+    return "unknown", None
 
 
 class _RecordingPyAutoGUI:
@@ -96,6 +117,7 @@ class Sandbox:
         self._images: list[str] = []
         self._trace_dir = trace_dir
         self._screenshot_seq = 0
+        self.default_browser, default_browser_app_path = _detect_default_browser()
         if self._trace_dir is not None:
             self._trace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -137,6 +159,34 @@ class Sandbox:
 
         self._ns["log"] = _log
         self._ns["display"] = _display
+        self._ns["default_browser"] = self.default_browser
+
+        def _launch_app(app_name: str) -> None:
+            if not isinstance(app_name, str) or not app_name.strip():
+                raise ValueError("An application name is required.")
+            app_name = app_name.strip()
+            requested_app = app_name
+            if app_name == "default_browser":
+                if default_browser_app_path is None:
+                    raise RuntimeError("The operating system's default browser could not be detected.")
+                app_name = default_browser_app_path
+            elif app_name == self.default_browser and default_browser_app_path:
+                app_name = default_browser_app_path
+            if sys.platform != "darwin":
+                raise RuntimeError("Direct app launching is currently supported on macOS only.")
+            try:
+                subprocess.run(
+                    ["/usr/bin/open", "-a", app_name],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self._record_action("launch_app", (requested_app,), {})
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise RuntimeError(f"Could not launch {app_name}: {exc}") from exc
+
+        self._ns["launch_app"] = _launch_app
 
         # Pre-import common modules so the model can use them without imports
         import pyautogui  # noqa: F401 — available in model's namespace
