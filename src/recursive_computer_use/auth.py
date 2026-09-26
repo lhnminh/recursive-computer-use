@@ -2,8 +2,8 @@
 auth.py — Resolve OpenAI client credentials.
 
 Priority:
-  1. OPENAI_API_KEY in environment (set via .env or shell)
-  2. Codex OAuth via local codex-as-api proxy (reads ~/.codex/auth.json automatically)
+  1. Codex OAuth via local codex-as-api proxy (reads ~/.codex/auth.json automatically)
+  2. OPENAI_API_KEY in environment (set via .env or shell)
 
 The codex-as-api proxy handles the Cloudflare challenge and Codex CLI request
 shape so we don't have to replicate it. Start it with:
@@ -39,21 +39,21 @@ def resolve() -> ClientConfig:
 
     Raises ``RuntimeError`` if no credentials are found.
     """
-    # 1. Explicit API key in environment (wins over everything)
+    # 1. Codex OAuth present → route through local proxy (default)
+    if _has_codex_oauth():
+        return ClientConfig(api_key=CODEX_PROXY_DUMMY_KEY, base_url=CODEX_PROXY_BASE_URL)
+
+    # 2. Fall back to an explicit API key in the environment
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if api_key:
         return ClientConfig(api_key=api_key, base_url=None)
 
-    # 2. Codex OAuth present → route through local proxy
-    if _has_codex_oauth():
-        return ClientConfig(api_key=CODEX_PROXY_DUMMY_KEY, base_url=CODEX_PROXY_BASE_URL)
-
     raise RuntimeError(
         "No OpenAI credentials found.\n"
         "Options:\n"
-        "  • Set OPENAI_API_KEY in your .env file, OR\n"
         "  • Log in with the Codex CLI: codex login\n"
-        "    then start the proxy:      npx codex-as-api"
+        "    then start the proxy:      npx codex-as-api  (default), OR\n"
+        "  • Set OPENAI_API_KEY in your .env file"
     )
 
 
