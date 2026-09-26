@@ -13,6 +13,7 @@ Observations returned to the model are a JSON string with:
 from __future__ import annotations
 
 import base64
+import builtins
 import io
 import sys
 import traceback
@@ -20,6 +21,7 @@ from contextlib import redirect_stdout
 from typing import Any, Callable
 
 from .store import Action, ActionStore
+from .evolution.models import HarnessPolicy
 
 
 def _pil_to_base64(image: Any) -> str:
@@ -42,8 +44,31 @@ _RECORDED_ACTIONS = frozenset(
         "press",
         "hotkey",
         "scroll",
+        "screenshot",
     }
 )
+
+_TOOL_KIND = {
+    "click": "click",
+    "doubleClick": "double_click",
+    "rightClick": "right_click",
+    "moveTo": "move",
+    "dragTo": "drag",
+    "write": "type",
+    "typewrite": "type",
+    "press": "press",
+    "hotkey": "hotkey",
+    "scroll": "scroll",
+    "screenshot": "screenshot",
+}
+
+_SAFE_IMPORTS = frozenset(
+    {"collections", "datetime", "itertools", "json", "math", "PIL", "pyautogui", "re", "statistics", "time"}
+)
+
+
+class PolicyViolationError(RuntimeError):
+    """Raised before an action that violates the active harness policy."""
 
 _NON_TEXT_KEYS = frozenset(
     {
@@ -100,10 +125,24 @@ class RecordingPyAutoGUI:
         self._emit = emit
         self._run_id: str | None = None
         self._turn = 0
+        self._tool_allowlist: set[str] | None = None
+        self._action_budget = 40
+        self._max_without_screenshot = 3
+        self._action_count = 0
+        self._actions_since_screenshot = 0
 
     def set_context(self, run_id: str | None, turn: int) -> None:
         self._run_id = run_id
         self._turn = turn
+
+    def apply_policy(self, policy: HarnessPolicy) -> None:
+        self._tool_allowlist = set(policy.tool_allowlist)
+        self._action_budget = int(policy.limits.get("action_budget", 40))
+        self._max_without_screenshot = int(
+            policy.limits.get("max_actions_without_screenshot", 3)
+        )
+        self._action_count = 0
+        self._actions_since_screenshot = 0
 
     def __getattr__(self, name: str) -> Any:
         target = getattr(self._pyautogui, name)
@@ -111,10 +150,46 @@ class RecordingPyAutoGUI:
             return target
 
         def recorded(*args: Any, **kwargs: Any) -> Any:
+            if name == "screenshot":
+                result = target(*args, **kwargs)
+                self._actions_since_screenshot = 0
+                return result
+            self._authorize(name)
             self._record(name, args, kwargs)
+            self._action_count += 1
+            self._actions_since_screenshot += 1
             return target(*args, **kwargs)
 
         return recorded
+
+    def _authorize(self, name: str) -> None:
+        tool = _TOOL_KIND[name]
+        reason = None
+        if self._tool_allowlist is not None and tool not in self._tool_allowlist:
+            reason = f"tool '{tool}' is not allowed by the active policy"
+        elif self._action_count >= self._action_budget:
+            reason = f"action budget of {self._action_budget} is exhausted"
+        elif self._actions_since_screenshot >= self._max_without_screenshot:
+            reason = (
+                "a screenshot is required before another action "
+                f"({self._max_without_screenshot} action limit)"
+            )
+        if reason is None:
+            return
+        if self._emit is not None and self._run_id is not None:
+            try:
+                self._emit(
+                    self._run_id,
+                    self._turn,
+                    0,
+                    "policy_violation",
+                    None,
+                    None,
+                    {"tool": tool, "reason": reason},
+                )
+            except Exception:
+                pass
+        raise PolicyViolationError(reason)
 
     def _record(
         self, kind: str, positional: tuple[Any, ...], keyword: dict[str, Any]
@@ -218,9 +293,6 @@ class Sandbox:
         self._ns: dict[str, Any] = {}
         self._images: list[str] = []
 
-        # Inject helpers into the namespace
-        self._ns["__builtins__"] = __builtins__
-
         # log(value) — appends to stdout-like output
         # display(pil_image) — captures a screenshot for the observation
         sandbox_self = self
@@ -241,6 +313,26 @@ class Sandbox:
 
         self._store = store
         self._recorder = RecordingPyAutoGUI(pyautogui_module, self._emit_action)
+        safe_builtins = dict(vars(builtins))
+        for dangerous in ("breakpoint", "compile", "eval", "exec", "input", "open"):
+            safe_builtins.pop(dangerous, None)
+
+        def _safe_import(
+            name: str,
+            globals: Any = None,
+            locals: Any = None,
+            fromlist: Any = (),
+            level: int = 0,
+        ) -> Any:
+            root = name.split(".", 1)[0]
+            if root not in _SAFE_IMPORTS:
+                raise ImportError(f"import of '{root}' is blocked by the local harness")
+            if root == "pyautogui":
+                return self._recorder
+            return builtins.__import__(name, globals, locals, fromlist, level)
+
+        safe_builtins["__import__"] = _safe_import
+        self._ns["__builtins__"] = safe_builtins
         self._ns["pyautogui"] = self._recorder
         self._ns["time"] = time
 
@@ -248,6 +340,11 @@ class Sandbox:
         """Tag future desktop actions with the active run and model turn."""
 
         self._recorder.set_context(run_id, turn)
+
+    def apply_policy(self, policy: HarnessPolicy) -> None:
+        """Apply enforceable limits before executing any model-generated code."""
+
+        self._recorder.apply_policy(policy)
 
     def _emit_action(
         self,

@@ -49,6 +49,20 @@ def main() -> None:
         action="store_true",
         help="Disable MongoDB run and action telemetry.",
     )
+    parser.add_argument(
+        "--task-key",
+        default="general-desktop",
+        help="Stable task family used for task-specific memory and policies.",
+    )
+    parser.add_argument(
+        "--verifier-url",
+        help="Local HTTP endpoint returning deterministic success and safety metrics.",
+    )
+    parser.add_argument(
+        "--no-evolve",
+        action="store_true",
+        help="Load the safe local policy without proposing or evaluating changes.",
+    )
     args = parser.parse_args()
 
     # Lazy import so startup errors are clean.
@@ -62,6 +76,9 @@ def main() -> None:
             mongodb_uri=args.mongodb_uri,
             mongodb_db=args.mongodb_db,
             log_actions=not args.no_log,
+            task_key=args.task_key,
+            verifier_url=args.verifier_url,
+            evolve=not args.no_evolve,
         )
         print(result)
     except KeyboardInterrupt:

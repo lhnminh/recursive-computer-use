@@ -94,6 +94,28 @@ class ExperienceMemory:
         except Exception:
             return []
 
+    def latest_for_policy(
+        self, task_key: str, policy_version: int
+    ) -> dict[str, Any] | None:
+        """Return the newest verified experience for one policy version."""
+
+        try:
+            return self.collection.find_one(
+                {"task_key": validate_task_key(task_key), "policy_version": policy_version},
+                {"_id": 0, "embedding": 0},
+                sort=[("created_at", -1)],
+            )
+        except Exception:
+            matches = self._recent_for_task(task_key, 20)
+            return next(
+                (
+                    document
+                    for document in matches
+                    if document.get("policy_version") == policy_version
+                ),
+                None,
+            )
+
 
 def lessons_from(memories: Iterable[Mapping[str, Any]]) -> list[str]:
     """Return unique non-empty lessons suitable for bounded prompt context."""

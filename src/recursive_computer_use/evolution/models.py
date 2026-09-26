@@ -87,6 +87,7 @@ class Experience:
     summary: str
     lesson: str
     policy_version: int
+    metrics: Mapping[str, float | int] = field(default_factory=dict)
     embedding: tuple[float, ...] | None = None
     created_at: datetime = field(default_factory=utcnow)
 
@@ -102,6 +103,17 @@ class Experience:
         object.__setattr__(self, "lesson", redact_text(self.lesson, field_name="lesson"))
         if not isinstance(self.policy_version, int) or self.policy_version < 1:
             raise EvolutionValidationError("policy_version must be a positive integer")
+        allowed_metrics = {
+            "success_rate",
+            "wrong_clicks",
+            "wrong_field_entries",
+            "policy_violations",
+            "action_count",
+            "duration_ms",
+        }
+        if set(self.metrics) - allowed_metrics:
+            raise EvolutionValidationError("experience contains unsupported metrics")
+        object.__setattr__(self, "metrics", dict(self.metrics))
         if self.embedding is not None:
             vector = tuple(float(value) for value in self.embedding)
             if not vector or len(vector) > 4096:
@@ -127,6 +139,7 @@ class Experience:
             summary=document["summary"],
             lesson=document["lesson"],
             policy_version=document["policy_version"],
+            metrics=document.get("metrics", {}),
             embedding=(
                 tuple(document["embedding"])
                 if document.get("embedding") is not None

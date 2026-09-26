@@ -105,6 +105,13 @@ class PolicyRepository:
         )
         return HarnessPolicy.from_document(document) if document else None
 
+    def latest_candidate(self, task_key: str) -> HarnessPolicy | None:
+        document = self.policies.find_one(
+            {"task_key": task_key, "status": "candidate"},
+            sort=[("version", -1)],
+        )
+        return HarnessPolicy.from_document(document) if document else None
+
     def record_evaluation(self, evaluation: EvaluationRecord) -> None:
         """Store the verdict and update only the evaluated candidate's status."""
 

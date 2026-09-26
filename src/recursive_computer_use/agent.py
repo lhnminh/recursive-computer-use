@@ -22,8 +22,11 @@ from typing import Any
 from openai import OpenAI
 
 from .auth import resolve as resolve_auth
+from .evolution.models import EvaluationMetrics, HarnessPolicy
+from .evolution.runtime import DEFAULT_LIMITS, DEFAULT_RULES, EvolutionRuntime
 from .sandbox import Sandbox
 from .store import ActionStore
+from .verification import fetch_local_metrics
 
 # Maximum round-trips before we give up.
 MAX_TURNS = 30
@@ -82,6 +85,9 @@ def run(
     mongodb_db: str | None = None,
     log_actions: bool = True,
     action_store: ActionStore | None = None,
+    task_key: str = "general-desktop",
+    verifier_url: str | None = None,
+    evolve: bool = True,
 ) -> str:
     """
     Run a computer-use task described by *prompt*.
@@ -101,6 +107,12 @@ def run(
         Disable all MongoDB telemetry when false.
     action_store:
         Optional injected store used by tests and embedding applications.
+    task_key:
+        Stable task family used to scope memories and policies.
+    verifier_url:
+        Optional localhost endpoint returning deterministic task metrics.
+    evolve:
+        Allow verified runs to propose and evaluate policy versions.
 
     Returns
     -------
@@ -124,7 +136,43 @@ def run(
 
     run_id = action_store.start_run(prompt, model)
     sandbox = Sandbox(store=action_store)
-    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    evolution_runtime: EvolutionRuntime | None = None
+    policy = HarnessPolicy(
+        task_key=task_key,
+        version=1,
+        parent_version=None,
+        status="accepted",
+        rules=DEFAULT_RULES,
+        limits=DEFAULT_LIMITS,
+        reason="Local fallback policy.",
+    )
+    if (
+        evolve
+        and getattr(action_store, "enabled", False)
+        and action_store.database is not None
+    ):
+        try:
+            evolution_runtime = EvolutionRuntime(action_store.database)
+            policy = evolution_runtime.policy_for_run(task_key)
+        except Exception as exc:
+            if verbose:
+                print(f"[evolution] policy load failed: {exc}", file=sys.stderr)
+            evolution_runtime = None
+    if hasattr(sandbox, "apply_policy"):
+        sandbox.apply_policy(policy)
+
+    policy_text = "\n".join(f"- {rule}" for rule in policy.rules)
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "system",
+            "content": (
+                f"Active local harness policy v{policy.version} for {policy.task_key}. "
+                "These rules are mandatory and enforced by the runtime:\n"
+                f"{policy_text}"
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
     status = "failed"
     final_text: str | None = None
 
@@ -151,6 +199,45 @@ def run(
             if not msg.tool_calls:
                 final_text = msg.content or ""
                 status = "completed"
+                if verifier_url:
+                    try:
+                        verified = fetch_local_metrics(verifier_url)
+                        metrics = EvaluationMetrics(
+                            success_rate=verified.success_rate,
+                            wrong_clicks=verified.wrong_clicks,
+                            wrong_field_entries=verified.wrong_field_entries,
+                            policy_violations=(
+                                verified.policy_violations
+                                + int(getattr(action_store, "policy_violation_count", 0))
+                            ),
+                            action_count=max(
+                                verified.action_count,
+                                int(getattr(action_store, "action_count", 0)),
+                            ),
+                            duration_ms=verified.duration_ms,
+                        )
+                        evolution_result = (
+                            evolution_runtime.record_verified_run(policy, metrics)
+                            if evolution_runtime is not None
+                            else None
+                        )
+                        if hasattr(action_store, "attach_verification"):
+                            action_store.attach_verification(
+                                run_id,
+                                task_key=task_key,
+                                policy_version=policy.version,
+                                metrics=metrics.to_document(),
+                                evolution_result=evolution_result,
+                            )
+                        if verbose:
+                            print(
+                                f"[evolution] verified metrics={metrics.to_document()} "
+                                f"result={evolution_result}",
+                                file=sys.stderr,
+                            )
+                    except Exception as exc:
+                        if verbose:
+                            print(f"[evolution] verifier failed: {exc}", file=sys.stderr)
                 if verbose:
                     print(f"[done] {final_text}", file=sys.stderr)
                 return final_text
