@@ -62,7 +62,14 @@ class EvolutionRuntime:
             database["policies"], database["evaluations"]
         )
 
-    def policy_for_run(self, task_key: str) -> HarnessPolicy:
+    def policy_for_run(
+        self, task_key: str, *, version: int | None = None
+    ) -> HarnessPolicy:
+        if version is not None:
+            selected = self.policies.by_version(task_key, version)
+            if selected is None:
+                raise ValueError(f"policy {task_key} v{version} does not exist")
+            return selected
         candidate = self.policies.latest_candidate(task_key)
         if candidate is not None:
             return candidate
@@ -140,8 +147,10 @@ class EvolutionRuntime:
             query_text=f"{experience.summary} {experience.lesson}",
             limit=3,
         )
-        known = set(LESSONS.values())
-        learned_lessons = [lesson for lesson in lessons_from(memories) if lesson in known]
+        known_lessons = set(LESSONS.values())
+        learned_lessons = [
+            lesson for lesson in lessons_from(memories) if lesson in known_lessons
+        ]
         rules = list(parent.rules)
         for lesson in learned_lessons:
             if lesson not in rules:

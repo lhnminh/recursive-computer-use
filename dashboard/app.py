@@ -12,6 +12,8 @@ from urllib.parse import parse_qs, urlparse
 
 from recursive_computer_use.evolution import (
     annealed_edit_budget,
+    learning_curve,
+    policy_lineage,
     verify_evaluation_evidence,
 )
 
@@ -55,7 +57,7 @@ def _fixture_analytics(
 
 
 def load_data(query_text: str = "") -> tuple[dict[str, Any], str]:
-    uri = os.environ.get("MONGODB_URI")
+    uri = os.environ.get("MONGODB_DASHBOARD_URI") or os.environ.get("MONGODB_URI")
     if uri:
         client = None
         try:
@@ -73,9 +75,15 @@ def load_data(query_text: str = "") -> tuple[dict[str, Any], str]:
                 )
             task_key = os.environ.get("MONGODB_TASK_KEY") or next(
                 (run.get("task_key") for run in data["runs"] if run.get("task_key")),
-                "local-form-v1",
+                next(
+                    (
+                        policy.get("task_key")
+                        for policy in data["policies"]
+                        if policy.get("task_key")
+                    ),
+                    "local-form-v1",
+                ),
             )
-            from recursive_computer_use.evolution.analytics import learning_curve, policy_lineage
             from recursive_computer_use.evolution.memory import ExperienceMemory
 
             try:
@@ -94,6 +102,13 @@ def load_data(query_text: str = "") -> tuple[dict[str, Any], str]:
                 )
             except Exception:
                 data["top_lessons"] = []
+            data["skills"] = list(
+                db["skills"]
+                .find({}, {"_id": 0, "description": 1, "status": 1, "lift": 1,
+                           "protected": 1, "retirement_candidate": 1})
+                .sort("lift", -1)
+                .limit(12)
+            )
             if any(data.values()):
                 return data, "MongoDB Atlas"
         except Exception:
@@ -111,16 +126,20 @@ def load_data(query_text: str = "") -> tuple[dict[str, Any], str]:
     return data, "offline fixtures"
 
 
+def _esc(value: Any) -> str:
+    return html.escape(str(value), quote=True)
+
+
 def metric_cards(runs: list[dict[str, Any]]) -> str:
     cards = []
     for run in sorted(runs, key=lambda item: item.get("policy_version", 0))[-2:]:
         metrics = run.get("verified_metrics", {})
         success = "PASS" if metrics.get("success_rate") else "FAIL"
         cards.append(
-            f"<article><h3>Policy v{run.get('policy_version','?')} <span class='{success.lower()}'>{success}</span></h3>"
-            f"<b>{metrics.get('wrong_field_entries',0)}</b> wrong fields · "
-            f"<b>{metrics.get('wrong_clicks',0)}</b> wrong clicks · "
-            f"<b>{metrics.get('action_count',0)}</b> actions</article>"
+            f"<article><h3>Policy v{_esc(run.get('policy_version','?'))} <span class='{success.lower()}'>{success}</span></h3>"
+            f"<b>{_esc(metrics.get('wrong_field_entries',0))}</b> wrong fields · "
+            f"<b>{_esc(metrics.get('wrong_clicks',0))}</b> wrong clicks · "
+            f"<b>{_esc(metrics.get('action_count',0))}</b> actions</article>"
         )
     return "".join(cards) or "<article>No verified runs yet.</article>"
 
@@ -139,42 +158,48 @@ def render(query_text: str = "") -> bytes:
     next_budget = annealed_edit_budget(int(newest.get("version", 1) or 1))
     curve_rows = "".join(
         "<tr>"
-        f"<td>v{html.escape(str(item.get('policy_version', '?')))}</td>"
-        f"<td>{html.escape(str(item.get('runs', 0)))}</td>"
+        f"<td>v{_esc(item.get('policy_version', '?'))}</td>"
+        f"<td>{_esc(item.get('runs', 0))}</td>"
         f"<td>{float(item.get('mean_success_rate') or 0):.0%}</td>"
         f"<td>{float(item.get('mean_action_count') or 0):.1f}</td>"
-        f"<td>{html.escape(str(item.get('total_policy_violations', 0)))}</td>"
-        f"<td>{html.escape(str(item.get('decision') or 'pending'))}</td></tr>"
+        f"<td>{_esc(item.get('total_policy_violations', 0))}</td>"
+        f"<td>{_esc(item.get('decision') or 'pending')}</td></tr>"
         for item in data.get("learning_curve", [])
     ) or "<tr><td colspan='6'>No metrics history yet.</td></tr>"
     lineage = " → ".join(
-        f"v{html.escape(str(item.get('version', '?')))}" for item in data.get("lineage", [])
+        f"v{_esc(item.get('version', '?'))}" for item in data.get("lineage", [])
     ) or "No accepted lineage yet."
     lesson_rows = "".join(
-        f"<li><b>{html.escape(str(item.get('summary', '')))}</b> "
-        f"{html.escape(str(item.get('lesson', '')))}</li>"
+        f"<li><b>{_esc(item.get('summary', ''))}</b> "
+        f"{_esc(item.get('lesson', ''))}</li>"
         for item in data.get("top_lessons", [])
     ) or "<li>No matching lessons yet.</li>"
+    pruning = sum(
+        bool(skill.get("retirement_candidate")) for skill in data.get("skills", [])
+    )
     body = f"""<!doctype html><html><head><meta charset='utf-8'><meta http-equiv='refresh' content='5'>
 <title>Recursive Harness</title><style>
 body{{font-family:Inter,system-ui;background:#09111f;color:#ecf2ff;margin:0;padding:36px}}main{{max-width:1050px;margin:auto}}h1{{font-size:42px;margin-bottom:4px}}.muted{{color:#94a3b8}}.grid{{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:26px 0}}article,section{{background:#111c31;border:1px solid #293854;border-radius:8px;padding:22px}}.pass{{color:#4ade80}}.fail{{color:#fb7185}}.flow{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}}.flow div{{background:#182641;border-radius:8px;padding:15px}}table{{width:100%;border-collapse:collapse;text-align:left}}th,td{{padding:8px;border-bottom:1px solid #293854}}input,button{{font:inherit;padding:7px}}ol{{padding-left:22px}}li{{margin:10px 0}}@media(max-width:800px){{.grid,.flow{{grid-template-columns:1fr}}}}
-</style></head><body><main><div class='muted'>LIVE SOURCE: {html.escape(source)}</div><h1>Recursive Harness</h1><p class='muted'>Local execution. Redacted Atlas memory. Verified policy evolution.</p>
+</style></head><body><main><div class='muted'>LIVE SOURCE: {_esc(source)}</div><h1>Recursive Harness</h1><p class='muted'>Local execution. Redacted Atlas memory. Verified policy evolution.</p>
 <div class='grid'>{metric_cards(data.get('runs', []))}</div>
 <div class='flow'><div>1. Verified failure</div><div>2. Atlas memory</div><div>3. Policy candidate</div><div>4. Regression gate</div></div>
-<div class='grid'><section><h2>Learning curve</h2><table><thead><tr><th>Policy</th><th>Runs</th><th>Success</th><th>Actions</th><th>Violations</th><th>Decision</th></tr></thead><tbody>{curve_rows}</tbody></table></section>
-<section><h2>Policy lineage</h2><p>{lineage}</p></section>
+<div class='grid'><section><h2>Retrieved lesson</h2><p>{html.escape(str(lesson))}</p></section>
+<section><h2>Policy diff</h2><p>v{_esc(previous.get('version','?'))} → v{_esc(newest.get('version','?'))}</p><p class='pass'>+ {html.escape(' | '.join(added) or 'No added rule')}</p></section>
+<section><h2>Evaluation</h2><h3 class='{_esc(str(evaluation.get('decision','')).lower())}'>{html.escape(str(evaluation.get('decision','pending')).upper())}</h3><p>{html.escape(str(evaluation.get('reason','Awaiting a candidate trial.')))}</p><p class='{evidence_class}'>Evidence: {evidence_label}</p></section>
 <section><h2>Top lessons</h2><form method='get'><label for='q'>Query</label> <input id='q' name='q' value='{html.escape(query_text, quote=True)}'><button type='submit'>Search</button></form><ol>{lesson_rows}</ol></section>
-<section><h2>Retrieved lesson</h2><p>{html.escape(str(lesson))}</p></section>
-<section><h2>Policy diff</h2><p>v{previous.get('version','?')} → v{newest.get('version','?')}</p><p class='pass'>+ {html.escape(' | '.join(added) or 'No added rule')}</p></section>
-<section><h2>Evaluation</h2><h3 class='{str(evaluation.get('decision','')).lower()}'>{html.escape(str(evaluation.get('decision','pending')).upper())}</h3><p>{html.escape(str(evaluation.get('reason','Awaiting a candidate trial.')))}</p><p class='{evidence_class}'>Evidence: {evidence_label}</p></section>
 <section><h2>Regularization</h2><p>Next proposal budget: <b>{next_budget}</b> independent edit(s).</p><p>Task-specific literals and bundled mature-policy changes are rejected before execution.</p></section>
 <section><h2>Privacy boundary</h2><p>Atlas receives no screenshot bytes or typed content, only redacted summaries, metrics, policies, and text selected for Atlas Automated Embedding. Selected screenshots may transit to the configured model.</p></section></div>
+<section><h2>Learning curve</h2><table><thead><tr><th>Policy</th><th>Runs</th><th>Success</th><th>Actions</th><th>Violations</th><th>Decision</th></tr></thead><tbody>{curve_rows}</tbody></table></section>
+<div class='grid'><section><h2>Accepted lineage</h2><p>{lineage}</p></section><section><h2>Pruning</h2><p><b>{pruning}</b> learned skill(s) await replay ablation. Protected safety rules cannot be retired.</p></section></div>
 </main></body></html>"""
     return body.encode("utf-8")
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
+        if self.headers.get("Host") not in {f"{HOST}:{PORT}", f"localhost:{PORT}"}:
+            self.send_error(403)
+            return
         parsed = urlparse(self.path)
         if parsed.path != "/":
             self.send_error(404)

@@ -308,8 +308,10 @@ Each episode also has `recovery`: `nudges`, `no_effect`, `repeated_code`,
 ### Skill statuses
 
 Use only `candidate`, `active`, or `retired`. A rule in an accepted policy
-becomes `active`. A skill with `lift < -0.2` after 3 verified uses becomes
-`retired`.
+becomes `active`. A learned skill with `lift < -0.2` after 3 verified uses
+becomes a retirement candidate. It becomes `retired` only after replay
+ablation preserves success and safety while reducing token or action cost.
+Default safety rules are protected and cannot be retired.
 
 ### Search indexes
 

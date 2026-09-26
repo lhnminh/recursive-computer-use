@@ -137,6 +137,12 @@ class PolicyRepository:
         )
         return HarnessPolicy.from_document(document) if document else None
 
+    def by_version(self, task_key: str, version: int) -> HarnessPolicy | None:
+        document = self.policies.find_one(
+            {"task_key": task_key, "version": int(version)}
+        )
+        return HarnessPolicy.from_document(document) if document else None
+
     def record_evaluation(self, evaluation: EvaluationRecord) -> None:
         """Atomically store evidence and decide one still-pending candidate.
 

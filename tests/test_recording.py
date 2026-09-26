@@ -12,6 +12,9 @@ class FakePyAutoGUI:
     def position(self):
         return (41, 73)
 
+    def screenshot(self, *args, **kwargs):
+        self.calls.append(("screenshot", args, kwargs))
+
     def click(self, *args, **kwargs):
         self.calls.append(("click", args, kwargs))
         return "clicked"
@@ -114,6 +117,31 @@ class RecordingTests(unittest.TestCase):
         self.assertEqual(store.actions[0].run_id, "run-7")
         self.assertEqual(store.actions[0].turn, 2)
         self.assertNotIn("do-not-store-me", repr(store.actions[1].args))
+
+    def test_sandbox_blocks_known_escapes(self):
+        sandbox = Sandbox(store=FakeStore(), pyautogui_module=FakePyAutoGUI())
+        escapes = [
+            "pyautogui._pyautogui",
+            "().__class__.__base__.__subclasses__()",
+            "getattr(log, '__glob' + 'als__')",
+            "(i for i in []).gi_frame",
+            "import json; json.codecs",
+            "import re; re.enum",
+            "pyautogui._action_budget = 10**9",
+            "from PIL import Image; Image.open('/etc/hosts')",
+            "pyautogui.screenshot().save('/tmp/x.png')",
+        ]
+        for code in escapes:
+            with self.subTest(code=code):
+                result = sandbox.run(code)
+                self.assertIn("SandboxViolationError", result["error"] or "")
+
+    def test_sandbox_blocks_unrecorded_and_file_actions(self):
+        sandbox = Sandbox(store=FakeStore(), pyautogui_module=FakePyAutoGUI())
+        for code in ("pyautogui.mouseDown()", "pyautogui.screenshot('/tmp/x.png')"):
+            with self.subTest(code=code):
+                result = sandbox.run(code)
+                self.assertIn("PolicyViolationError", result["error"] or "")
 
 
 if __name__ == "__main__":

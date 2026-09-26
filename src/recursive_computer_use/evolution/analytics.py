@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
 from typing import Any, Mapping
+
+from .models import EvaluationMetrics, validate_task_key
 
 
 METRIC_FIELDS = (
@@ -17,29 +20,57 @@ METRIC_FIELDS = (
 
 
 def record_metrics(
-    db: Any,
+    database: Any,
     task_key: str,
     policy_version: int,
-    metrics: Mapping[str, int | float],
+    metrics: Mapping[str, int | float] | EvaluationMetrics,
+    *,
+    run_id: str | None = None,
 ) -> Any:
-    """Insert a verified run's measurements in the run_metrics time series."""
+    """Insert one verified run in the ``run_metrics`` time series."""
 
-    unknown = set(metrics) - set(METRIC_FIELDS)
+    values = metrics.to_document() if isinstance(metrics, EvaluationMetrics) else dict(metrics)
+    unknown = set(values) - set(METRIC_FIELDS)
     if unknown:
         raise ValueError(f"unsupported run metric(s): {', '.join(sorted(unknown))}")
-    measurements = {name: metrics[name] for name in METRIC_FIELDS if name in metrics}
-    return db["run_metrics"].insert_one(
-        {
-            "ts": datetime.now(timezone.utc),
-            "meta": {"task_key": task_key, "policy_version": policy_version},
-            **measurements,
-        }
+    measurements = {name: values[name] for name in METRIC_FIELDS if name in values}
+    meta = {
+        "task_key": validate_task_key(task_key),
+        "policy_version": int(policy_version),
+    }
+    if run_id is not None:
+        meta["run_id"] = str(run_id)
+    return database["run_metrics"].insert_one(
+        {"ts": datetime.now(timezone.utc), "meta": meta, **measurements}
     )
 
 
-def learning_curve(db: Any, task_key: str) -> list[dict[str, Any]]:
+def record_metrics_nonfatal(
+    database: Any,
+    *,
+    run_id: str,
+    task_key: str,
+    policy_version: int,
+    metrics: EvaluationMetrics,
+) -> None:
+    """Agent hook that keeps analytics failure non-fatal to desktop work."""
+
+    try:
+        record_metrics(
+            database,
+            task_key,
+            policy_version,
+            metrics,
+            run_id=run_id,
+        )
+    except Exception as exc:
+        print(f"[analytics] record_metrics failed: {exc}", file=sys.stderr)
+
+
+def learning_curve(database: Any, task_key: str) -> list[dict[str, Any]]:
     """Aggregate run means and evaluation decisions by policy version."""
 
+    task_key = validate_task_key(task_key)
     pipeline = [
         {"$match": {"meta.task_key": task_key}},
         {
@@ -48,6 +79,7 @@ def learning_curve(db: Any, task_key: str) -> list[dict[str, Any]]:
                 "runs": {"$sum": 1},
                 "mean_success_rate": {"$avg": "$success_rate"},
                 "mean_action_count": {"$avg": "$action_count"},
+                "mean_duration_ms": {"$avg": "$duration_ms"},
                 "total_policy_violations": {"$sum": "$policy_violations"},
             }
         },
@@ -80,18 +112,25 @@ def learning_curve(db: Any, task_key: str) -> list[dict[str, Any]]:
                 "runs": 1,
                 "mean_success_rate": 1,
                 "mean_action_count": 1,
+                "mean_duration_ms": 1,
                 "total_policy_violations": 1,
+                "policy_violations": "$total_policy_violations",
                 "decision": {"$ifNull": [{"$first": "$evaluation.decision"}, None]},
             }
         },
         {"$sort": {"policy_version": 1}},
     ]
-    return list(db["run_metrics"].aggregate(pipeline))
+    try:
+        return list(database["run_metrics"].aggregate(pipeline))
+    except Exception as exc:
+        print(f"[analytics] learning_curve failed: {exc}", file=sys.stderr)
+        return []
 
 
-def policy_lineage(db: Any, task_key: str) -> list[dict[str, Any]]:
+def policy_lineage(database: Any, task_key: str) -> list[dict[str, Any]]:
     """Return the latest accepted policy and its ancestors from v1 onward."""
 
+    task_key = validate_task_key(task_key)
     pipeline = [
         {"$match": {"task_key": task_key, "status": "accepted"}},
         {"$sort": {"version": -1}},
@@ -115,6 +154,19 @@ def policy_lineage(db: Any, task_key: str) -> list[dict[str, Any]]:
         {"$unwind": "$chain"},
         {"$replaceRoot": {"newRoot": "$chain"}},
         {"$sort": {"version": 1}},
-        {"$project": {"_id": 0, "task_key": 1, "version": 1, "parent_version": 1, "status": 1}},
+        {
+            "$project": {
+                "_id": 0,
+                "task_key": 1,
+                "version": 1,
+                "parent_version": 1,
+                "status": 1,
+                "reason": 1,
+            }
+        },
     ]
-    return list(db["policies"].aggregate(pipeline))
+    try:
+        return list(database["policies"].aggregate(pipeline))
+    except Exception as exc:
+        print(f"[analytics] policy_lineage failed: {exc}", file=sys.stderr)
+        return []

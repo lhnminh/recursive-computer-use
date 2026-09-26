@@ -12,8 +12,9 @@ Per run, the agent calls two methods:
     skills with one aggregation.
 
 Lift of a skill = verified success rate of episodes that used it, minus the
-success rate of episodes on the same ``task_key`` that did not. A skill whose
-lift stays negative after ``RETIRE_MIN_USES`` uses is retired.
+success rate of episodes on the same ``task_key`` that did not. Negative lift
+marks a learned skill as a pruning candidate. Retirement requires a separate
+replay ablation and protected safety rules can never be retired automatically.
 
 Only verified outcomes (``success`` / ``failure``) count toward uses, wins and
 lift. The agent never grades itself.
@@ -36,6 +37,7 @@ from typing import Any, Mapping, Sequence
 from pymongo import UpdateOne
 from pymongo.database import Database
 
+from .evolution.replay import ReplayCase, evaluate_pruning_ablation
 from .store import _safe_summary
 
 EMBEDDING_MODEL = "voyage-4"
@@ -87,12 +89,15 @@ class LearningStore:
 
     # -- skills ------------------------------------------------------------
 
-    def sync_policy_skills(self, policy: Any) -> list[dict[str, Any]]:
+    def sync_policy_skills(
+        self, policy: Any, *, protected_rules: Sequence[str] = ()
+    ) -> list[dict[str, Any]]:
         """Upsert one skill per policy rule; return the episode's ``skills_used``."""
         try:
             now = _utcnow()
             active = policy.status == "accepted"
             names = [skill_name(policy.task_key, rule) for rule in policy.rules]
+            protected = set(protected_rules)
             self.skills.bulk_write(
                 [
                     UpdateOne(
@@ -106,9 +111,14 @@ class LearningStore:
                                 "uses": 0,
                                 "wins": 0,
                                 "lift": None,
+                                "protected": rule in protected,
+                                "retirement_candidate": False,
                                 "created_at": now,
                             },
-                            "$set": {"updated_at": now},
+                            "$set": {
+                                "updated_at": now,
+                                "protected": rule in protected,
+                            },
                         },
                         upsert=True,
                     )
@@ -129,7 +139,7 @@ class LearningStore:
             return []
 
     def update_lift(self) -> None:
-        """Recompute ``lift`` for every used skill, then retire losers."""
+        """Recompute lift and flag weak learned skills for replay ablation."""
         win = {"$cond": [{"$eq": ["$outcome", "success"]}, 1, 0]}
         rate_without = {
             "$divide": [
@@ -191,17 +201,82 @@ class LearningStore:
         ]
         try:
             self.episodes.aggregate(pipeline)
-            now = _utcnow()
             self.skills.update_many(
                 {
                     "status": {"$ne": "retired"},
+                    "protected": {"$ne": True},
                     "uses": {"$gte": RETIRE_MIN_USES},
                     "lift": {"$lt": RETIRE_BELOW_LIFT},
                 },
-                {"$set": {"status": "retired", "retired_at": now, "updated_at": now}},
+                {
+                    "$set": {
+                        "retirement_candidate": True,
+                        "retirement_reason": "negative observational lift; replay ablation required",
+                        "updated_at": _utcnow(),
+                    }
+                },
+            )
+            self.skills.update_many(
+                {
+                    "status": {"$ne": "retired"},
+                    "$or": [
+                        {"protected": True},
+                        {"lift": {"$gte": RETIRE_BELOW_LIFT}},
+                    ],
+                },
+                {
+                    "$set": {"retirement_candidate": False, "updated_at": _utcnow()},
+                    "$unset": {"retirement_reason": ""},
+                },
             )
         except Exception as exc:
             _warn("update_lift", exc)
+
+    def retire_skill_after_ablation(
+        self, skill_id: Any, cases: Sequence[ReplayCase]
+    ) -> dict[str, Any]:
+        """Retire one unprotected candidate only after replay proves removal safe."""
+
+        try:
+            skill = self.skills.find_one({"_id": skill_id})
+            if not skill:
+                return {"retired": False, "reason": "skill not found"}
+            if skill.get("protected"):
+                return {"retired": False, "reason": "protected skills cannot be retired"}
+            if not skill.get("retirement_candidate"):
+                return {"retired": False, "reason": "skill is not a pruning candidate"}
+            decision = evaluate_pruning_ablation(cases)
+            if not decision.accepted:
+                return {"retired": False, "reason": "; ".join(decision.reasons)}
+            now = _utcnow()
+            result = self.skills.update_one(
+                {
+                    "_id": skill_id,
+                    "protected": {"$ne": True},
+                    "retirement_candidate": True,
+                    "status": {"$ne": "retired"},
+                },
+                {
+                    "$set": {
+                        "status": "retired",
+                        "retired_at": now,
+                        "updated_at": now,
+                        "ablation": {
+                            "cases": len(cases),
+                            "success_gain": decision.success_gain,
+                            "token_delta": decision.token_delta,
+                        },
+                    }
+                },
+            )
+            retired = getattr(result, "matched_count", 0) == 1
+            return {
+                "retired": retired,
+                "reason": "replay ablation passed" if retired else "skill changed concurrently",
+            }
+        except Exception as exc:
+            _warn("retire_skill_after_ablation", exc)
+            return {"retired": False, "reason": "retirement persistence failed"}
 
     # -- episodes ----------------------------------------------------------
 

@@ -63,7 +63,22 @@ def main() -> None:
         action="store_true",
         help="Load the safe local policy without proposing or evaluating changes.",
     )
+    parser.add_argument(
+        "--policy-version",
+        type=int,
+        help="Load an exact stored policy version for replay evidence collection.",
+    )
+    parser.add_argument(
+        "--observe-only",
+        action="store_true",
+        help="Record verified metrics without proposing or promoting a policy.",
+    )
     args = parser.parse_args()
+
+    if args.policy_version is not None and args.no_evolve:
+        parser.error("--policy-version requires persistent evolution; remove --no-evolve")
+    if args.observe_only and not args.verifier_url:
+        parser.error("--observe-only requires --verifier-url")
 
     # Lazy import so startup errors are clean.
     from .agent import run
@@ -79,6 +94,8 @@ def main() -> None:
             task_key=args.task_key,
             verifier_url=args.verifier_url,
             evolve=not args.no_evolve,
+            policy_version=args.policy_version,
+            observe_only=args.observe_only,
         )
         print(result)
     except KeyboardInterrupt:

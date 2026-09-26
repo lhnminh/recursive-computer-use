@@ -1,22 +1,14 @@
-# Security fixes: how to apply them
+# Security fixes
+
+The fixes in this review are now applied directly to the source tree. The
+adjacent patch file is retained only as review history and must not be applied
+again.
 
 A security review on 2026-09-26 found six problems. This file explains each
-one and how to fix it. The fixes touch files that other people own, so no code
-is committed yet. Each owner applies their own part.
+one and the implemented mitigation.
 
-A tested patch for all six is in `docs/security-fixes.patch`. It applies
-cleanly to `main` as of this commit. With it, the full test suite passes
-(`OK`, 3 skipped).
-
-```bash
-git apply docs/security-fixes.patch                       # everything
-git apply --include='demo/*' docs/security-fixes.patch    # one area only
-```
-
-Fixes 2, 5 and 6 are on `main`. Skip them when you apply the patch.
-
-If your file has uncommitted work, commit it first. Then use
-`git apply --3way` so git merges around your changes.
+`docs/security-fixes.patch` is an archival review artifact. Do not apply it to
+current `main`.
 
 | # | Severity | Problem | File | Owner |
 |---|---|---|---|---|

@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 
 from recursive_computer_use import agent
-from recursive_computer_use.evolution import EvaluationMetrics, EvolutionRuntime
+from recursive_computer_use.evolution import EvaluationMetrics, EvolutionRuntime, ReplayCase
 from recursive_computer_use.learning import LearningStore, skill_name
 from recursive_computer_use.schema import SEARCH_INDEXES, ensure_schema
 from recursive_computer_use.store import ActionStore
@@ -119,8 +119,22 @@ class LearningAtlasTests(unittest.TestCase):
         self.assertAlmostEqual(get(good)["lift"], 1.0)
         self.assertAlmostEqual(get(bad)["lift"], -1.0)
         self.assertIsNone(get(base)["lift"])  # used by every episode: no baseline
-        self.assertEqual(get(bad)["status"], "retired")
+        self.assertEqual(get(bad)["status"], "active")
+        self.assertTrue(get(bad)["retirement_candidate"])
         self.assertEqual(get(good)["status"], "active")
+        ablation = self.learning.retire_skill_after_ablation(
+            get(bad)["_id"],
+            [
+                ReplayCase(
+                    "known-form",
+                    "regression",
+                    EvaluationMetrics(success_rate=1.0, action_count=6),
+                    EvaluationMetrics(success_rate=1.0, action_count=5),
+                )
+            ],
+        )
+        self.assertTrue(ablation["retired"])
+        self.assertEqual(get(bad)["status"], "retired")
 
     def test_3_voyage_retrieval(self):
         # Experiences via the real evolution runtime; lessons embedded by Atlas.

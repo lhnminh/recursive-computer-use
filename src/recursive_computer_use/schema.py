@@ -186,6 +186,17 @@ COLLECTIONS: dict[str, dict[str, Any]] = {
                 "uses": _INT,
                 "wins": _INT,
                 "lift": {"bsonType": ["double", "int", "null"]},
+                "protected": {"bsonType": "bool"},
+                "retirement_candidate": {"bsonType": "bool"},
+                "retirement_reason": _OPT_STR,
+                "ablation": {
+                    "bsonType": "object",
+                    "properties": {
+                        "cases": _INT,
+                        "success_gain": _NUM,
+                        "token_delta": {"bsonType": ["int", "long"]},
+                    },
+                },
                 "parent_id": {"bsonType": ["objectId", "null"]},
                 "created_at": _DATE,
                 "updated_at": _DATE,
@@ -383,11 +394,70 @@ COLLECTIONS: dict[str, dict[str, Any]] = {
                 "candidate_metrics": _METRICS,
                 "decision": {"enum": ["accepted", "rejected"]},
                 "reason": _STR,
+                "baseline_policy_sha256": _OPT_STR,
+                "candidate_policy_sha256": _OPT_STR,
+                "evidence_sha256": _OPT_STR,
                 "created_at": _DATE,
             },
         ),
         "indexes": [
             IndexModel([("task_key", ASCENDING), ("created_at", ASCENDING)]),
+        ],
+    },
+    "replay_evaluations": {
+        "validator": _schema(
+            [
+                "suite_id",
+                "task_key",
+                "baseline_policy_version",
+                "candidate_policy_version",
+                "decision",
+                "cases",
+                "created_at",
+            ],
+            {
+                "suite_id": _STR,
+                "task_key": _STR,
+                "baseline_policy_version": {"bsonType": ["int", "long"]},
+                "candidate_policy_version": {"bsonType": ["int", "long"]},
+                "decision": {"enum": ["accepted", "rejected"]},
+                "reason": _STR,
+                "evolve_tasks": _INT,
+                "regression_tasks": _INT,
+                "holdout_tasks_ignored": _INT,
+                "success_gain": _NUM,
+                "token_delta": {"bsonType": ["int", "long"]},
+                "cases": {
+                    "bsonType": "array",
+                    "items": {
+                        "bsonType": "object",
+                        "required": [
+                            "task_id",
+                            "split",
+                            "baseline_metrics",
+                            "candidate_metrics",
+                        ],
+                        "properties": {
+                            "task_id": _STR,
+                            "split": {"enum": ["evolve", "regression", "holdout"]},
+                            "baseline_metrics": _METRICS,
+                            "candidate_metrics": _METRICS,
+                            "baseline_tokens": _INT,
+                            "candidate_tokens": _INT,
+                        },
+                    },
+                },
+                "created_at": _DATE,
+            },
+        ),
+        "indexes": [
+            IndexModel([("suite_id", ASCENDING)], unique=True),
+            IndexModel(
+                [
+                    ("task_key", ASCENDING),
+                    ("candidate_policy_version", ASCENDING),
+                ]
+            ),
         ],
     },
     # -- support ---------------------------------------------------------------

@@ -67,6 +67,14 @@ verifier must produce measurable evidence.
   newly learned rules.
 - Atomic candidate promotion on Atlas with tamper-evident policy and evaluation
   hashes.
+- Multi-task replay evidence can atomically promote or reject a candidate while
+  keeping holdout cases out of selection.
+- Weak learned skills are flagged for pruning, but retire only after a
+  non-regressing replay ablation; default safety rules are protected.
+- Recovery monitoring detects repeated code, repeated errors, and actions with
+  no visible effect.
+- Model-written Python is screened for private interpreter access, file-backed
+  screenshots, unrecorded desktop calls, and known in-process escape paths.
 - Runtime enforcement of tool allowlists, action budgets, and screenshot
   cadence.
 - Restricted imports and blocked direct file access in model-generated code.
@@ -143,9 +151,14 @@ the `>=3.13` requirement.
 OPENAI_API_KEY=sk-...
 MONGODB_URI=mongodb://localhost:27017
 MONGODB_DB=recursive_computer_use
+MONGODB_DASHBOARD_URI=mongodb://readonly-user:password@localhost:27017
 ```
 
 Do not commit `.env`. It is excluded by `.gitignore`.
+
+Use a read-only MongoDB user for `MONGODB_DASHBOARD_URI`. The dashboard falls
+back to `MONGODB_URI` for local development, but the shared write credential is
+not the recommended demo configuration.
 
 ### Model authentication
 
@@ -293,6 +306,8 @@ recursive-computer-use [options] PROMPT
 | `--task-key` | `general-desktop` | Scope memories and policies to a task family |
 | `--verifier-url` | none | Local endpoint supplying deterministic metrics |
 | `--no-evolve` | off | Disable persistent policy evolution |
+| `--policy-version` | latest candidate or accepted | Load an exact stored version for replay evidence |
+| `--observe-only` | off | Record verified metrics without changing policy state |
 
 Use a stable `--task-key` for repeated variants of one workflow. Do not reuse a
 task key across unrelated applications or objectives, because their memories
@@ -342,12 +357,43 @@ task-specific literals. The budget shrinks from three independent edits for a
 young lineage to one edit for a mature lineage. This keeps later changes small
 enough to attribute to one hypothesis.
 
-The reusable replay gate in `evolution/replay.py` separates task evidence into
-`evolve`, `regression`, and `holdout` splits. Promotion uses only evolve and
-regression cases. Holdout results are reported but deliberately excluded from
-selection so repeated decisions do not train on the exam. The current local
-form demo remains a two-run demonstration; a multi-task runner must supply the
-replay cases before describing the demo as regression-tested across tasks.
+The replay gate separates task evidence into `evolve`, `regression`, and
+`holdout` splits. Promotion uses only evolve and regression cases. Holdout
+results are stored and reported but deliberately excluded from selection so
+repeated decisions do not train on the exam.
+
+After testers collect baseline and candidate metrics for a pending policy,
+copy `examples/replay_evidence.example.json`, fill in the evidence, and run:
+
+```powershell
+python scripts/evaluate_replay.py examples/replay_evidence.example.json
+```
+
+Collect each task pair without prematurely promoting the candidate:
+
+```powershell
+# Accepted parent evidence
+python -m recursive_computer_use `
+  --task-key local-form-v1 --policy-version 1 --observe-only `
+  --verifier-url http://127.0.0.1:8765/api/result `
+  "Complete the current replay task."
+
+# Pending candidate evidence
+python -m recursive_computer_use `
+  --task-key local-form-v1 --policy-version 2 --observe-only `
+  --verifier-url http://127.0.0.1:8765/api/result `
+  "Complete the current replay task."
+```
+
+Reset or switch the deterministic task between runs. Copy the resulting
+`verified_metrics` and episode token counts into the evidence file. Observe-only
+runs never propose, accept, or reject a policy.
+
+The command checks lineage, tool non-expansion, evolve improvement, regression
+safety, and token cost. It writes the complete suite to `replay_evaluations`,
+then atomically records the evaluation and changes the pending candidate to
+`accepted` or `rejected`. The evidence file contains metrics only, not task
+answers or prompts.
 
 Failed candidates are marked `rejected`. Successful candidates are marked
 `accepted`; the highest accepted version becomes the next baseline.
@@ -439,6 +485,12 @@ status transition in one transaction. Each new record also contains hashes of
 the baseline policy, candidate policy, and complete evaluation evidence. The
 hashes make later mutation detectable, but they are not signatures and do not
 replace separate database credentials for a hostile-writer threat model.
+
+### `replay_evaluations`
+
+Stores the full per-task baseline/candidate evidence for a replay suite,
+including split labels and token counts. Holdout cases remain in this audit
+record but never affect the promotion decision.
 
 ## Privacy and safety boundaries
 

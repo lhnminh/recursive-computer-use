@@ -29,6 +29,7 @@ from openai import OpenAI
 
 from .auth import resolve as resolve_auth
 from .evolution.models import EvaluationMetrics, HarnessPolicy
+from .evolution.analytics import record_metrics_nonfatal
 from .evolution.runtime import DEFAULT_LIMITS, DEFAULT_RULES, EvolutionRuntime
 from .learning import LearningStore
 from .recovery import RecoveryMonitor
@@ -96,6 +97,8 @@ def run(
     task_key: str = "general-desktop",
     verifier_url: str | None = None,
     evolve: bool = True,
+    policy_version: int | None = None,
+    observe_only: bool = False,
 ) -> str:
     """
     Run a computer-use task described by *prompt*.
@@ -121,6 +124,10 @@ def run(
         Optional localhost endpoint returning deterministic task metrics.
     evolve:
         Allow verified runs to propose and evaluate policy versions.
+    policy_version:
+        Load one exact stored policy version. Intended for replay evidence runs.
+    observe_only:
+        Record verifier metrics without proposing or promoting a policy.
 
     Returns
     -------
@@ -161,7 +168,9 @@ def run(
     ):
         try:
             evolution_runtime = EvolutionRuntime(action_store.database)
-            policy = evolution_runtime.policy_for_run(task_key)
+            policy = evolution_runtime.policy_for_run(
+                task_key, version=policy_version
+            )
         except Exception as exc:
             if verbose:
                 print(f"[evolution] policy load failed: {exc}", file=sys.stderr)
@@ -172,7 +181,11 @@ def run(
     # Learning layer: episodes, sites and skills (see learning.py).
     started_at = datetime.now(timezone.utc)
     learning = LearningStore.for_store(action_store) if evolve else None
-    skills_used = learning.sync_policy_skills(policy) if learning else []
+    skills_used = (
+        learning.sync_policy_skills(policy, protected_rules=DEFAULT_RULES)
+        if learning
+        else []
+    )
     verified_metrics: EvaluationMetrics | None = None
     llm_calls = tokens_in = tokens_out = 0
     timed_out = False
@@ -210,11 +223,17 @@ def run(
             return
         verified_metrics = metrics
         try:
-            evolution_result = (
-                evolution_runtime.record_verified_run(policy, metrics)
-                if evolution_runtime is not None
-                else None
-            )
+            if observe_only:
+                evolution_result = {
+                    "result": "observed_only",
+                    "policy_version": policy.version,
+                }
+            else:
+                evolution_result = (
+                    evolution_runtime.record_verified_run(policy, metrics)
+                    if evolution_runtime is not None
+                    else None
+                )
             if hasattr(action_store, "attach_verification"):
                 action_store.attach_verification(
                     run_id,
@@ -222,6 +241,15 @@ def run(
                     policy_version=policy.version,
                     metrics=metrics.to_document(),
                     evolution_result=evolution_result,
+                )
+            metrics_database = getattr(action_store, "database", None)
+            if metrics_database is not None:
+                record_metrics_nonfatal(
+                    metrics_database,
+                    run_id=run_id,
+                    task_key=task_key,
+                    policy_version=policy.version,
+                    metrics=metrics,
                 )
             if verbose:
                 print(
@@ -235,7 +263,9 @@ def run(
 
     # Rules come from Atlas. Keep each to one bounded line so a stored rule
     # cannot smuggle extra instructions into the system prompt.
-    policy_text = "\n".join(f"- {' '.join(str(rule).split())[:300]}" for rule in policy.rules)
+    policy_text = "\n".join(
+        f"- {' '.join(str(rule).split())[:300]}" for rule in policy.rules
+    )
     messages: list[dict[str, Any]] = [
         {
             "role": "system",

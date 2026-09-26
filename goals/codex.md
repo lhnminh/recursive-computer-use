@@ -63,6 +63,7 @@ retired skills make a good dashboard panel.
 - [x] Add a request for Minh in `GOALS.md` to call `record_metrics` after
       each verified run.
 - [x] Test against `rcu_test_codex` with seeded data.
+- [x] `agent.py` calls `record_metrics` after each verified run.
 
 ## X4. Dashboard shows the Atlas features (~45 min)
 

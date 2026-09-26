@@ -8,6 +8,7 @@ from recursive_computer_use.evolution import (
     HarnessPolicy,
     ReplayCase,
     annealed_edit_budget,
+    evaluate_pruning_ablation,
     evaluate_replay_suite,
     propose_policy,
     review_proposal,
@@ -144,6 +145,33 @@ class ReplayGateTests(unittest.TestCase):
         )
         self.assertFalse(decision.accepted)
         self.assertIn("token cost increased", " ".join(decision.reasons))
+
+    def test_pruning_requires_equal_results_and_lower_cost(self):
+        accepted = evaluate_pruning_ablation(
+            [
+                ReplayCase(
+                    "old",
+                    "regression",
+                    metrics(1.0, actions=8),
+                    metrics(1.0, actions=6),
+                    baseline_tokens=1_000,
+                    candidate_tokens=900,
+                )
+            ]
+        )
+        self.assertTrue(accepted.accepted)
+
+        regressed = evaluate_pruning_ablation(
+            [
+                ReplayCase(
+                    "old",
+                    "regression",
+                    metrics(1.0, actions=8),
+                    metrics(0.0, actions=6),
+                )
+            ]
+        )
+        self.assertFalse(regressed.accepted)
 
 
 if __name__ == "__main__":

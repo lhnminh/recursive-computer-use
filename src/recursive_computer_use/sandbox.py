@@ -12,11 +12,13 @@ Observations returned to the model are a JSON string with:
 
 from __future__ import annotations
 
+import ast
 import base64
 import builtins
 import io
 import sys
 import traceback
+import types
 from contextlib import redirect_stdout
 from typing import Any, Callable
 
@@ -69,6 +71,133 @@ _SAFE_IMPORTS = frozenset(
 
 class PolicyViolationError(RuntimeError):
     """Raised before an action that violates the active harness policy."""
+
+
+class SandboxViolationError(RuntimeError):
+    """Raised when model code reaches for interpreter internals."""
+
+
+_BLOCKED_BUILTINS = frozenset(
+    {
+        "breakpoint",
+        "compile",
+        "delattr",
+        "dir",
+        "eval",
+        "exec",
+        "globals",
+        "help",
+        "input",
+        "locals",
+        "memoryview",
+        "open",
+        "setattr",
+        "vars",
+    }
+)
+
+_BLOCKED_ATTRS = frozenset(
+    {
+        "ag_frame",
+        "cr_frame",
+        "f_back",
+        "f_builtins",
+        "f_globals",
+        "f_locals",
+        "gi_frame",
+        "tb_frame",
+        "load",
+        "load_path",
+        "open",
+        "save",
+        "show",
+        "truetype",
+    }
+)
+
+_UNRECORDED_ACTIONS = frozenset(
+    {
+        "drag",
+        "dragRel",
+        "hold",
+        "hscroll",
+        "keyDown",
+        "keyUp",
+        "leftClick",
+        "middleClick",
+        "mouseDown",
+        "mouseUp",
+        "move",
+        "moveRel",
+        "run",
+        "tripleClick",
+        "vscroll",
+    }
+)
+
+
+def _blocked_name(name: str) -> bool:
+    return name.startswith("_") or name in _BLOCKED_ATTRS
+
+
+def _check_source(code: str) -> None:
+    """Reject private names and frame access before model code executes."""
+
+    for node in ast.walk(ast.parse(code, "<model>", "exec")):
+        name = None
+        if isinstance(node, ast.Attribute):
+            name = node.attr
+        elif isinstance(node, ast.Name):
+            name = node.id
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            name = node.name
+        elif isinstance(node, ast.alias):
+            name = node.asname or node.name.rsplit(".", 1)[-1]
+        if name and _blocked_name(name):
+            raise SandboxViolationError(
+                f"access to '{name}' is blocked by the local harness"
+            )
+
+
+def _safe_getattr(obj: Any, name: str, *default: Any) -> Any:
+    if _blocked_name(str(name)):
+        raise SandboxViolationError(
+            f"access to '{name}' is blocked by the local harness"
+        )
+    return _guard_value(getattr(obj, name, *default))
+
+
+class _ModuleProxy:
+    """Expose an allowlisted module without modules it imported internally."""
+
+    def __init__(self, module: types.ModuleType) -> None:
+        object.__setattr__(self, "_module", module)
+
+    def __getattr__(self, name: str) -> Any:
+        if _blocked_name(name):
+            raise SandboxViolationError(
+                f"access to '{name}' is blocked by the local harness"
+            )
+        module = object.__getattribute__(self, "_module")
+        return _guard_value(getattr(module, name))
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise SandboxViolationError("modules are read-only in the local harness")
+
+    def __repr__(self) -> str:
+        module = object.__getattribute__(self, "_module")
+        return f"<sandboxed module {module.__name__}>"
+
+
+def _guard_value(value: Any) -> Any:
+    if not isinstance(value, types.ModuleType):
+        return value
+    if value.__name__.split(".", 1)[0] in _SAFE_IMPORTS - {"pyautogui"}:
+        return _ModuleProxy(value)
+    raise SandboxViolationError(
+        f"module '{value.__name__}' is blocked by the local harness"
+    )
+
 
 _NON_TEXT_KEYS = frozenset(
     {
@@ -145,12 +274,22 @@ class RecordingPyAutoGUI:
         self._actions_since_screenshot = 0
 
     def __getattr__(self, name: str) -> Any:
+        if _blocked_name(name):
+            raise SandboxViolationError(
+                f"access to '{name}' is blocked by the local harness"
+            )
+        if name in _UNRECORDED_ACTIONS:
+            raise PolicyViolationError(
+                f"pyautogui.{name} bypasses the harness; use a recorded action"
+            )
         target = getattr(self._pyautogui, name)
         if name not in _RECORDED_ACTIONS or not callable(target):
-            return target
+            return _guard_value(target)
 
         def recorded(*args: Any, **kwargs: Any) -> Any:
             if name == "screenshot":
+                if args or "imageFilename" in kwargs:
+                    raise PolicyViolationError("screenshot() may not write to a file")
                 result = target(*args, **kwargs)
                 self._actions_since_screenshot = 0
                 return result
@@ -313,9 +452,12 @@ class Sandbox:
 
         self._store = store
         self._recorder = RecordingPyAutoGUI(pyautogui_module, self._emit_action)
-        safe_builtins = dict(vars(builtins))
-        for dangerous in ("breakpoint", "compile", "eval", "exec", "input", "open"):
-            safe_builtins.pop(dangerous, None)
+        safe_builtins = {
+            name: value
+            for name, value in vars(builtins).items()
+            if name not in _BLOCKED_BUILTINS
+        }
+        safe_builtins["getattr"] = _safe_getattr
 
         def _safe_import(
             name: str,
@@ -329,12 +471,13 @@ class Sandbox:
                 raise ImportError(f"import of '{root}' is blocked by the local harness")
             if root == "pyautogui":
                 return self._recorder
-            return builtins.__import__(name, globals, locals, fromlist, level)
+            imported = builtins.__import__(name, globals, locals, fromlist, level)
+            return _ModuleProxy(imported)
 
         safe_builtins["__import__"] = _safe_import
         self._ns["__builtins__"] = safe_builtins
         self._ns["pyautogui"] = self._recorder
-        self._ns["time"] = time
+        self._ns["time"] = _ModuleProxy(time)
 
     def set_action_context(self, run_id: str | None, turn: int) -> None:
         """Tag future desktop actions with the active run and model turn."""
@@ -386,6 +529,7 @@ class Sandbox:
         error: str | None = None
 
         try:
+            _check_source(code)
             with redirect_stdout(stdout_buf):
                 exec(compile(code, "<model>", "exec"), self._ns)  # noqa: S102
         except Exception:
