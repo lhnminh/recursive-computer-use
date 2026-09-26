@@ -62,6 +62,11 @@ verifier must produce measurable evidence.
 - Learning layer: one episode per run, sites, and skills with measured lift.
 - Candidate policy creation after verified failure.
 - Candidate promotion only after verified improvement.
+- Shrinking proposal edit budgets as a policy lineage matures.
+- Deterministic rejection of task literals, URLs, emails, and opaque IDs in
+  newly learned rules.
+- Atomic candidate promotion on Atlas with tamper-evident policy and evaluation
+  hashes.
 - Runtime enforcement of tool allowlists, action budgets, and screenshot
   cadence.
 - Restricted imports and blocked direct file access in model-generated code.
@@ -331,6 +336,19 @@ Acceptance requires:
 - no increase in policy violations;
 - no expansion of tool access.
 
+Before a candidate is stored, a deterministic regularization critic also
+requires that it fit the lineage's edit budget and contain no protected or
+task-specific literals. The budget shrinks from three independent edits for a
+young lineage to one edit for a mature lineage. This keeps later changes small
+enough to attribute to one hypothesis.
+
+The reusable replay gate in `evolution/replay.py` separates task evidence into
+`evolve`, `regression`, and `holdout` splits. Promotion uses only evolve and
+regression cases. Holdout results are reported but deliberately excluded from
+selection so repeated decisions do not train on the exam. The current local
+form demo remains a two-run demonstration; a multi-task runner must supply the
+replay cases before describing the demo as regression-tested across tasks.
+
 Failed candidates are marked `rejected`. Successful candidates are marked
 `accepted`; the highest accepted version becomes the next baseline.
 
@@ -416,7 +434,11 @@ as `[character]`; control keys such as `tab` or `ctrl` may be retained.
 ### `evaluations`
 
 Stores baseline and candidate metrics, the decision, and the deterministic
-reason for that decision.
+reason for that decision. Atlas deployments write the evaluation and candidate
+status transition in one transaction. Each new record also contains hashes of
+the baseline policy, candidate policy, and complete evaluation evidence. The
+hashes make later mutation detectable, but they are not signatures and do not
+replace separate database credentials for a hostile-writer threat model.
 
 ## Privacy and safety boundaries
 

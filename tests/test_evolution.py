@@ -143,14 +143,13 @@ class PolicyTests(unittest.TestCase):
                 ],
                 "screenshot_cadence": 1,
                 "retry_limit": 1,
-                "tool_allowlist": ["click", "type", "screenshot"],
             },
             reason="Repeated wrong-field failures require focus verification.",
         )
         self.assertEqual(candidate.version, 2)
         self.assertEqual(candidate.status, "candidate")
         self.assertEqual(candidate.limits["max_actions_without_screenshot"], 1)
-        self.assertNotIn("scroll", candidate.tool_allowlist)
+        self.assertIn("scroll", candidate.tool_allowlist)
 
     def test_candidate_cannot_grant_new_tool(self):
         with self.assertRaises(EvolutionValidationError):

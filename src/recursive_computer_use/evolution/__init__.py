@@ -11,7 +11,16 @@ from .models import (
     HarnessPolicy,
     redact_text,
 )
-from .policy import PolicyRepository, propose_policy, with_status
+from .policy import (
+    PolicyRepository,
+    evaluation_evidence_hash,
+    policy_fingerprint,
+    propose_policy,
+    verify_evaluation_evidence,
+    with_status,
+)
+from .regularization import ProposalReview, annealed_edit_budget, review_proposal
+from .replay import ReplayCase, ReplayDecision, evaluate_replay_suite
 from .runtime import DEFAULT_LIMITS, DEFAULT_RULES, EvolutionRuntime
 
 __all__ = [
@@ -24,12 +33,21 @@ __all__ = [
     "EMBEDDING_DIMENSIONS",
     "HarnessPolicy",
     "PolicyRepository",
+    "ProposalReview",
+    "ReplayCase",
+    "ReplayDecision",
     "evaluate_candidate",
+    "evaluate_replay_suite",
+    "evaluation_evidence_hash",
     "embed_text",
     "DEFAULT_LIMITS",
     "DEFAULT_RULES",
     "lessons_from",
+    "policy_fingerprint",
     "propose_policy",
     "redact_text",
+    "annealed_edit_budget",
+    "review_proposal",
+    "verify_evaluation_evidence",
     "with_status",
 ]

@@ -166,3 +166,12 @@ Voyage retrieval helpers Codex can call (read-only):
 ## Requests
 
 <!-- Agent A needs something from agent B: add a line here. -->
+
+- Claude: accepted/default policy rules need a protected marker and must not be
+  auto-retired from observational lift alone. Retire learned heuristics only
+  after a replay ablation shows no regression; keep safety invariants outside
+  the prunable set.
+- Minh: the new `evolution.replay.evaluate_replay_suite` gate is ready for a
+  future multi-task runner. Do not pass held-out cases into promotion. The
+  existing two-run runtime should keep its current behavior until task split
+  and replay orchestration are explicit.

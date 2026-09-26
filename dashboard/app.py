@@ -9,6 +9,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from recursive_computer_use.evolution import (
+    annealed_edit_budget,
+    verify_evaluation_evidence,
+)
+
 
 HOST, PORT = "127.0.0.1", 8787
 FIXTURES = Path(__file__).with_name("fixtures.json")
@@ -58,6 +63,10 @@ def render() -> bytes:
     added = [rule for rule in newest.get("rules", []) if rule not in previous.get("rules", [])]
     lesson = (data.get("experiences") or [{}])[0].get("lesson", "No memory recorded")
     evaluation = (data.get("evaluations") or [{}])[0]
+    evidence_sealed = verify_evaluation_evidence(evaluation)
+    evidence_label = "VERIFIED" if evidence_sealed else "UNSEALED"
+    evidence_class = "pass" if evidence_sealed else "muted"
+    next_budget = annealed_edit_budget(int(newest.get("version", 1) or 1))
     body = f"""<!doctype html><html><head><meta charset='utf-8'><meta http-equiv='refresh' content='5'>
 <title>Recursive Harness</title><style>
 body{{font-family:Inter,system-ui;background:#09111f;color:#ecf2ff;margin:0;padding:36px}}main{{max-width:1050px;margin:auto}}h1{{font-size:42px;margin-bottom:4px}}.muted{{color:#94a3b8}}.grid{{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:26px 0}}article,section{{background:#111c31;border:1px solid #293854;border-radius:16px;padding:22px}}.pass{{color:#4ade80}}.fail{{color:#fb7185}}code{{color:#c4b5fd}}.flow{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}}.flow div{{background:#182641;border-radius:12px;padding:15px}}@media(max-width:800px){{.grid,.flow{{grid-template-columns:1fr}}}}
@@ -66,8 +75,9 @@ body{{font-family:Inter,system-ui;background:#09111f;color:#ecf2ff;margin:0;padd
 <div class='flow'><div>1. Verified failure</div><div>2. Atlas memory</div><div>3. Policy candidate</div><div>4. Regression gate</div></div>
 <div class='grid'><section><h2>Retrieved lesson</h2><p>{html.escape(str(lesson))}</p></section>
 <section><h2>Policy diff</h2><p>v{previous.get('version','?')} → v{newest.get('version','?')}</p><p class='pass'>+ {html.escape(' | '.join(added) or 'No added rule')}</p></section>
-<section><h2>Evaluation</h2><h3 class='{str(evaluation.get('decision','')).lower()}'>{html.escape(str(evaluation.get('decision','pending')).upper())}</h3><p>{html.escape(str(evaluation.get('reason','Awaiting a candidate trial.')))}</p></section>
-<section><h2>Privacy boundary</h2><p>Atlas receives no screenshot bytes or typed content, only redacted summaries, local embeddings, metrics, and versioned policies. Selected screenshots may transit to the configured model.</p></section></div>
+<section><h2>Evaluation</h2><h3 class='{str(evaluation.get('decision','')).lower()}'>{html.escape(str(evaluation.get('decision','pending')).upper())}</h3><p>{html.escape(str(evaluation.get('reason','Awaiting a candidate trial.')))}</p><p class='{evidence_class}'>Evidence: {evidence_label}</p></section>
+<section><h2>Regularization</h2><p>Next proposal budget: <b>{next_budget}</b> independent edit(s).</p><p>Task-specific literals and bundled mature-policy changes are rejected before execution.</p></section>
+<section><h2>Privacy boundary</h2><p>Atlas receives no screenshot bytes or typed content, only redacted summaries, metrics, policies, and text selected for Atlas Automated Embedding. Selected screenshots may transit to the configured model.</p></section></div>
 </main></body></html>"""
     return body.encode("utf-8")
 
