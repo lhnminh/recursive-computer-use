@@ -33,18 +33,18 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 - [x] Run `schema.py` against Atlas.
 - [x] Search filters: `skill_auto` and `skill_text` now also filter on `kind` and `scope.site`.
 
-## N3. HAR reader and redaction (~45 min)
+## N3. HAR reader and redaction — done
 
-- [ ] `network/har.py`: `load_exchanges(har_path)` returns `Exchange`
+- [x] `network/har.py`: `load_exchanges(har_path)` returns `Exchange`
       records for same-site API calls only. Drop images, CSS, fonts, JS,
       analytics hosts, and `OPTIONS`.
-- [ ] Redact: cookie and authorization values, `set-cookie`, tokens in
+- [x] Redact: cookie and authorization values, `set-cookie`, tokens in
       headers, emails and secrets in bodies (reuse `redact_text` patterns).
       Keep structure: header names, JSON keys, value types, short values.
-- [ ] Mark redacted token values with a stable placeholder like
+- [x] Mark redacted token values with a stable placeholder like
       `<token:1>`, the same placeholder wherever the same value appears, so
       the learner can link a response value to a later request.
-- [ ] Unit tests with a small hand-written HAR fixture.
+- [x] Unit tests with a small hand-written HAR fixture.
 
 ## N4. Learner (~60 min)
 
@@ -88,3 +88,4 @@ Phase 1 (C1 to C3: schema, Voyage, learning layer, `$rankFusion`) is done.
 - Phase 1: C1, C2, C2b (`5514ede`), C3 (`87d6d57`).
 - N1: `network/recipe.py` — `Recipe`, `render`, `template_vars`, `validate()`; 13 tests.
 - N2: `schema.py` — `api_recipe` skills, `recordings` (TTL 14 d), `api_call` edges; applied to Atlas.
+- N3: `network/har.py` — filter + redact HAR, stable `<token:N>`/`<email:N>`/`<secret:N>` placeholders shared with the task text; 8 tests.
