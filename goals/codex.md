@@ -66,14 +66,14 @@ retired skills make a good dashboard panel.
 
 ## X4. Dashboard shows the Atlas features (~45 min)
 
-- [ ] In `dashboard/app.py`, add panels for:
+- [x] In `dashboard/app.py`, add panels for:
       - the learning curve from X3,
       - the policy lineage from X3,
       - the top lessons for a query. Call Claude's
         `ExperienceMemory.find_similar(..., query_text=...)` from C2 and C3.
         If it is not merged yet, show the recent-lessons fallback.
-- [ ] Keep the fixture fallback for when Atlas is down.
-- [ ] Keep the dashboard read-only. It must work with a `read`-role user.
+- [x] Keep the fixture fallback for when Atlas is down.
+- [x] Keep the dashboard read-only. It must work with a `read`-role user.
 
 ## X5. Judge-facing demo script (~30 min)
 
@@ -92,3 +92,4 @@ retired skills make a good dashboard panel.
 <!-- One line per finished task: task id, commit hash, one-line result. -->
 - X1, `7a1e860`, atomic verdict/status update, duplicate save result, Atlas rollback check.
 - X2, `61b1835`, accepted-policy change stream with persisted resume and restart delivery.
+- X3, `f08a8da`, time-series learning curve and graph-lookup policy lineage queries.
