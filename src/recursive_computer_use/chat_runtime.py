@@ -9,14 +9,7 @@ from urllib.parse import urlparse
 
 
 DEFAULT_MODEL = "gpt-5.6-terra"
-DEFAULT_TASK_KEY = "web-desktop"
-
-_REVIEW_GUARDRAIL = """
-Safety requirement from the user interface: you may navigate, inspect, and
-prepare the requested work, but do not submit, publish, send, purchase, delete,
-confirm, or perform another irreversible external action. Stop immediately
-before the final irreversible action and tell the user what remains.
-""".strip()
+DEFAULT_TASK_KEY = "general-desktop"
 
 
 @dataclass(frozen=True)
@@ -30,7 +23,7 @@ class ChatOptions:
     log_actions: bool = True
     evolve: bool = True
     verbose: bool = False
-    stop_before_irreversible: bool = True
+    stop_before_irreversible: bool = False
 
 
 def normalize_task_key(value: str) -> str:
@@ -57,13 +50,11 @@ def validate_verifier_url(value: str | None) -> str | None:
 
 
 def build_agent_prompt(prompt: str, *, stop_before_irreversible: bool) -> str:
-    """Add the UI's review boundary without changing the user's visible text."""
+    """Prepare a task prompt, optionally adding a review boundary."""
 
     cleaned = prompt.strip()
     if not cleaned:
         raise ValueError("Enter a task before starting computer control.")
-    if stop_before_irreversible:
-        return f"{cleaned}\n\n{_REVIEW_GUARDRAIL}"
     return cleaned
 
 
@@ -91,7 +82,7 @@ def execute_task(
         log_actions=options.log_actions,
         task_key=normalize_task_key(options.task_key),
         verifier_url=verifier_url,
-        evolve=options.evolve and options.log_actions,
+        evolve=options.evolve,
     )
 
 

@@ -97,7 +97,6 @@ async function start(){
 start();
 </script></body></html>"""
 
-
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: bytes, content_type: str, headers: dict[str, str] | None = None) -> None:
         self.send_response(status)

@@ -196,6 +196,12 @@ npx codex-as-api
 If the proxy is expected but not listening, the CLI fails before starting a
 desktop run and prints the startup command.
 
+The web chat (`recursive-computer-use-chat`) is more convenient: when
+credentials resolve to Codex OAuth and the proxy is not already running, it
+starts `npx codex-as-api` for you, waits for it, then serves the site, and
+stops the proxy again on exit. With `OPENAI_API_KEY` set, no proxy is started.
+This requires Node.js on `PATH`; otherwise start the proxy manually.
+
 ## Local chatbot
 
 The primary product surface is a simple web chat that runs on the local
@@ -211,10 +217,13 @@ Alternatively:
 python -m recursive_computer_use.webui
 ```
 
-Open `http://127.0.0.1:8600`, enable **Arm computer control**, and enter a task
-in the chat box. Each submitted message starts one bounded run through the same
-policy-enforced `agent.run` path used by the CLI. Set `RCU_WEB_PORT` to override
-the port.
+Open `http://127.0.0.1:8600`, choose a demo task or describe one, then enable
+**Arm desktop** and run it. Each submitted task starts one bounded run through
+the same `agent.run` path used by the CLI. Set `RCU_WEB_HOST` or `RCU_WEB_PORT`
+to override the bind address or port.
+
+For the local computer-use demo, start `python -m demo.app` in another
+terminal. The conference check-in page is at `http://127.0.0.1:8765/`.
 
 The chat surface:
 
@@ -222,8 +231,8 @@ The chat surface:
   keyboard control;
 - allows only one desktop task at a time, even when several browser tabs are
   open;
-- stops before sending, publishing, purchasing, deleting, or confirming by
-  default; users must explicitly disable that review boundary;
+- passes the submitted task text to the same runtime prompt used by the
+  terminal command;
 - never displays or accepts MongoDB credentials, which remain in `.env`;
 - keeps chat history in the current browser tab;
 - uses existing sanitized telemetry and verifier-only promotion rules.
@@ -329,12 +338,10 @@ python -m recursive_computer_use do `
   "Check in Grace Hopper with email grace@example.com and city New York."
 ```
 
-When `do` finds no working recipe, it uses a local headless Chromium session
-and a page-element agent to teach a replacement without screenshots or desktop
-mouse control. The capture must pass the local verifier before it can train a
-recipe. For the `learn` command, the default leaves control with the person;
-add `--agent` only when you intentionally want desktop computer use to drive
-that recording.
+When `do` finds no working recipe, it opens the headed recording browser and
+uses the local computer-use agent once to teach a replacement. For the `learn`
+command, the default leaves control with the person; add `--agent` only when
+you intentionally want computer use to drive that recording.
 
 For the complete break-and-heal presentation, run:
 
