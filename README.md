@@ -231,8 +231,8 @@ The chat surface:
   keyboard control;
 - allows only one desktop task at a time, even when several browser tabs are
   open;
-- stops before sending, publishing, purchasing, deleting, or confirming by
-  default; users must explicitly disable that review boundary;
+- passes the submitted task text to the same runtime prompt used by the
+  terminal command;
 - never displays or accepts MongoDB credentials, which remain in `.env`;
 - keeps chat history in the current browser tab;
 - uses existing sanitized telemetry and verifier-only promotion rules.

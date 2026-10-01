@@ -11,8 +11,11 @@ from recursive_computer_use.chat_runtime import (
 
 
 class ChatRuntimeTests(unittest.TestCase):
-    def test_prompt_is_passed_through_without_ui_instructions(self):
-        self.assertEqual(build_agent_prompt("Draft an email"), "Draft an email")
+    def test_prompt_is_passed_through_unchanged_by_default(self):
+        self.assertEqual(
+            build_agent_prompt("Draft an email", stop_before_irreversible=False),
+            "Draft an email",
+        )
 
     def test_task_key_is_bounded_and_normalized(self):
         self.assertEqual(normalize_task_key("  Job Applications / Workday  "), "job-applications-workday")
@@ -47,7 +50,21 @@ class ChatRuntimeTests(unittest.TestCase):
         self.assertEqual(result, "done")
         self.assertEqual(calls[0][1]["task_key"], "browser-tasks")
         self.assertFalse(calls[0][1]["log_actions"])
-        self.assertFalse(calls[0][1]["evolve"])
+        self.assertTrue(calls[0][1]["evolve"])
+
+    def test_web_defaults_match_terminal_runtime_defaults(self):
+        calls = []
+
+        def runner(prompt, **kwargs):
+            calls.append((prompt, kwargs))
+            return "done"
+
+        execute_task("  Click the button  ", ChatOptions(), runner=runner)
+
+        self.assertEqual(calls[0][0], "Click the button")
+        self.assertEqual(calls[0][1]["task_key"], "general-desktop")
+        self.assertTrue(calls[0][1]["log_actions"])
+        self.assertTrue(calls[0][1]["evolve"])
 
     def test_errors_redact_credentials(self):
         message = safe_error(

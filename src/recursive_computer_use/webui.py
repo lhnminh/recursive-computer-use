@@ -1,6 +1,6 @@
 """Simple local web front end for the recursive computer-use harness.
 
-This replaces the previous Streamlit surface. It uses only the Python standard
+This provides a local chat surface. It uses only the Python standard
 library so there is no extra front-end dependency. It serves one chat page and a
 JSON ``/api/run`` endpoint that drives the same policy-enforced ``agent.run``
 path used by the CLI, through :mod:`recursive_computer_use.chat_runtime`.
@@ -13,7 +13,7 @@ Safety properties preserved from the old UI:
   browser tabs open.
 - MongoDB credentials stay in the environment and never enter the page.
 - Task execution goes through ``chat_runtime.execute_task`` unchanged, keeping
-  sanitized telemetry, the review boundary, and verifier-only promotion.
+  sanitized telemetry and verifier-only promotion.
 """
 
 from __future__ import annotations
@@ -198,8 +198,8 @@ def _run_task(payload: dict[str, Any]) -> dict[str, Any]:
             verifier_url=(str(payload.get("verifier_url")).strip() or None)
             if payload.get("verifier_url")
             else None,
-            log_actions=bool(payload.get("log_actions", False)),
-            evolve=bool(payload.get("evolve", False)),
+            log_actions=bool(payload.get("log_actions", True)),
+            evolve=bool(payload.get("evolve", True)),
             verbose=False,
         )
         answer = execute_task(prompt, options).strip()
